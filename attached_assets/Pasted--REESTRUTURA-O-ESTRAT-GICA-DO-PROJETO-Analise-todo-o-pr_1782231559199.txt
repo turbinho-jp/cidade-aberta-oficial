@@ -1,0 +1,383 @@
+# REESTRUTURAÇÃO ESTRATÉGICA DO PROJETO
+
+Analise todo o projeto existente e faça uma reestruturação completa da plataforma.
+
+O objetivo não é mais criar apenas um sistema de registro de ocorrências.
+
+O objetivo agora é criar uma PLATAFORMA DE PARTICIPAÇÃO CIDADÃ, TRANSPARÊNCIA PÚBLICA E GESTÃO DE DEMANDAS URBANAS.
+
+A plataforma deve permitir que cidadãos, prefeitura, secretarias, equipes de campo e sociedade acompanhem publicamente o ciclo completo de uma demanda.
+
+---
+
+## VISÃO DO PRODUTO
+
+Hoje a maioria dos sistemas públicos funciona assim:
+
+Cidadão abre protocolo
+↓
+Informação fica dentro da prefeitura
+↓
+A população não acompanha
+↓
+Não existe transparência
+
+A nova plataforma deve funcionar assim:
+
+Cidadão registra demanda
+↓
+Demanda aparece publicamente no mapa
+↓
+Outros cidadãos podem confirmar o problema
+↓
+Prefeitura responde publicamente
+↓
+Ordem de serviço é criada
+↓
+Equipe executa
+↓
+Resultado é publicado
+↓
+Todos acompanham o histórico completo
+
+O objetivo é transformar a plataforma em uma rede pública de acompanhamento da cidade.
+
+---
+
+# MÓDULO 1 - PARTICIPAÇÃO POPULAR
+
+Criar ambiente público.
+
+Cada cidadão poderá:
+
+* Criar demanda
+* Anexar fotos
+* Informar localização
+* Comentar
+* Acompanhar andamento
+* Receber notificações
+
+---
+
+## CONFIRMAÇÃO COMUNITÁRIA
+
+Não criar chamados duplicados.
+
+Adicionar botão:
+
+"Também acontece comigo"
+
+ou
+
+"Confirmar ocorrência"
+
+Exibir:
+
+* quantidade de confirmações
+* quantidade de moradores impactados
+
+Exemplo:
+
+Buraco na Rua X
+
+Criado por João
+
+145 confirmações
+
+23 comentários
+
+---
+
+## COMENTÁRIOS
+
+Permitir interação da população.
+
+Exemplo:
+
+"O problema aumentou."
+
+"Ainda não foi resolvido."
+
+"Foi corrigido ontem."
+
+Criar sistema de moderação.
+
+---
+
+## PERFIL DO CIDADÃO
+
+Cada usuário terá:
+
+* demandas criadas
+* confirmações realizadas
+* comentários
+* histórico de participação
+
+---
+
+# MÓDULO 2 - MAPA PÚBLICO
+
+Transformar o mapa no centro da plataforma.
+
+Exibir:
+
+* ocorrências
+* obras
+* ordens de serviço
+* demandas resolvidas
+
+Utilizar cores por status.
+
+Permitir filtros avançados.
+
+---
+
+# MÓDULO 3 - GESTÃO PÚBLICA
+
+Criar área administrativa profissional.
+
+Secretarias poderão:
+
+* analisar demandas
+* responder publicamente
+* alterar status
+* criar ordens de serviço
+* atribuir equipes
+* definir prioridades
+
+---
+
+# MÓDULO 4 - ORDENS DE SERVIÇO
+
+Criar sistema completo de OS.
+
+Fluxo:
+
+Demanda
+↓
+Triagem
+↓
+Aprovação
+↓
+OS
+↓
+Equipe
+↓
+Execução
+↓
+Conclusão
+
+---
+
+## TABELA DE EQUIPES
+
+Criar equipes responsáveis.
+
+Exemplos:
+
+Infraestrutura
+
+Pavimentação
+
+Iluminação
+
+Limpeza Urbana
+
+Saneamento
+
+Fiscalização
+
+---
+
+## CONTROLE DE PRAZOS
+
+Registrar:
+
+* data de criação
+* data de atendimento
+* data de conclusão
+
+Calcular automaticamente:
+
+* SLA
+* tempo médio de resolução
+
+---
+
+# MÓDULO 5 - TRANSPARÊNCIA TOTAL
+
+Cada demanda deve possuir timeline pública.
+
+Exemplo:
+
+01/07 - Demanda criada
+
+02/07 - Prefeitura respondeu
+
+05/07 - OS criada
+
+10/07 - Equipe enviada
+
+12/07 - Serviço concluído
+
+13/07 - Encerrado
+
+Todo histórico deve permanecer público.
+
+---
+
+# MÓDULO 6 - DASHBOARD PÚBLICO
+
+Criar página pública de indicadores.
+
+Exibir:
+
+Total de demandas
+
+Demandas resolvidas
+
+Demandas em andamento
+
+Tempo médio de resposta
+
+Tempo médio de conclusão
+
+Demandas por bairro
+
+Demandas por categoria
+
+---
+
+## RANKING DE BAIRROS
+
+Exibir:
+
+Bairros com mais demandas
+
+Bairros com mais demandas resolvidas
+
+Tempo médio por bairro
+
+---
+
+# MÓDULO 7 - PERFIS INSTITUCIONAIS
+
+Criar perfis oficiais.
+
+Exemplos:
+
+Secretaria de Infraestrutura
+
+Secretaria de Saúde
+
+Secretaria de Educação
+
+Secretaria de Meio Ambiente
+
+Cada perfil exibirá:
+
+* demandas recebidas
+* demandas resolvidas
+* tempo médio
+* índice de eficiência
+
+---
+
+# MÓDULO 8 - OBRAS E PROJETOS
+
+Criar módulo de obras públicas.
+
+Permitir divulgação de:
+
+* obras em andamento
+* projetos aprovados
+* investimentos
+* cronogramas
+
+Mostrar no mapa.
+
+---
+
+# MÓDULO 9 - NOTIFICAÇÕES
+
+Notificar cidadãos quando:
+
+* houver resposta
+* mudar status
+* OS for criada
+* problema for resolvido
+
+Preparar integração futura para:
+
+Email
+
+WhatsApp
+
+Push Notification
+
+---
+
+# MÓDULO 10 - GAMIFICAÇÃO
+
+Criar pontuação cidadã.
+
+Conceder pontos por:
+
+* participação
+* confirmação de demandas
+* comentários úteis
+* denúncias válidas
+
+Criar ranking de cidadãos colaboradores.
+
+---
+
+# MÓDULO 11 - MOBILE E PWA
+
+Transformar o sistema em aplicativo instalável.
+
+Permitir:
+
+* instalação no celular
+* uso rápido
+* notificações push
+* experiência mobile completa
+
+---
+
+# TECNOLOGIAS
+
+Manter:
+
+React
+TypeScript
+Supabase
+
+Implementar:
+
+Supabase Auth
+
+Supabase Storage
+
+Supabase Realtime
+
+Row Level Security
+
+PWA
+
+---
+
+# RESULTADO FINAL
+
+O sistema não deve parecer uma ouvidoria tradicional.
+
+O sistema deve parecer uma combinação de:
+
+* Rede social de cidadania
+* Portal de transparência
+* Sistema de gestão pública
+* Plataforma colaborativa da cidade
+
+O foco principal deve ser transparência, participação popular e acompanhamento público das ações do poder público.
+
+Antes de iniciar a implementação, apresente a nova arquitetura completa do banco de dados, das telas, dos fluxos e das permissões.
