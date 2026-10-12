@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, demandsTable, categoriesTable, neighborhoodsTable, departmentsTable, timelineTable, confirmationsTable, serviceOrdersTable, teamsTable, usersTable, demandStatusEnum, demandPriorityEnum } from "@workspace/db";
-import { eq, and, sql, ilike, desc, inArray } from "drizzle-orm";
+import { eq, and, or, sql, ilike, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireAdmin, optionalAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
 import { syncNeighborhoodCounters, syncDepartmentCounters } from "../lib/counters";
@@ -12,6 +12,18 @@ import {
 } from "../lib/validate";
 
 const router = Router();
+
+// Moderação: demanda de cidadão nasce pendente (is_approved = false) e só aparece
+// publicamente depois da aprovação. O autor e a equipe (admin/secretário) sempre a enxergam.
+const isStaff = (u: any) => !!u && (u.role === "admin" || u.role === "secretary");
+const visibleTo = (u: any) =>
+  isStaff(u)
+    ? undefined
+    : u
+      ? or(eq(demandsTable.isApproved, true), eq(demandsTable.authorId, u.id))
+      : eq(demandsTable.isApproved, true);
+const canSee = (u: any, d: { isApproved: boolean; authorId: number }) =>
+  d.isApproved || isStaff(u) || (!!u && u.id === d.authorId);
 
 function formatDemand(d: any, category?: any, neighborhood?: any, department?: any, isConfirmedByMe = false, attachments: AttachmentMeta[] = []) {
   return {
@@ -37,6 +49,7 @@ function formatDemand(d: any, category?: any, neighborhood?: any, department?: a
     authorId: d.authorId,
     authorName: d.authorName,
     publicResponse: d.publicResponse,
+    isApproved: d.isApproved,
     createdAt: d.createdAt.toISOString(),
     updatedAt: d.updatedAt.toISOString(),
   };
@@ -56,7 +69,10 @@ router.get("/demands", optionalAuth, async (req, res) => {
     const { status, categoryId, neighborhoodId, departmentId, search } = q.value;
     const limit = q.value.limit ?? 20;
     const offset = q.value.offset ?? 0;
+    const currentUser = (req as any).currentUser;
     const conditions: any[] = [];
+    const visibility = visibleTo(currentUser);
+    if (visibility) conditions.push(visibility);
     if (status) conditions.push(eq(demandsTable.status, status));
     if (categoryId) conditions.push(eq(demandsTable.categoryId, categoryId));
     if (neighborhoodId) conditions.push(eq(demandsTable.neighborhoodId, neighborhoodId));
@@ -69,7 +85,6 @@ router.get("/demands", optionalAuth, async (req, res) => {
       db.select({ count: sql<number>`count(*)::int` }).from(demandsTable).where(where),
     ]);
 
-    const currentUser = (req as any).currentUser;
     let confirmedIds = new Set<number>();
     if (currentUser) {
       const confirmations = await db.select({ demandId: confirmationsTable.demandId })
@@ -90,6 +105,34 @@ router.get("/demands", optionalAuth, async (req, res) => {
     res.json({
       demands: demands.map(d => formatDemand(d, catMap[d.categoryId], nbrMap[d.neighborhoodId], undefined, confirmedIds.has(d.id), attachmentsByDemand.get(d.id))),
       total: count,
+    });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Fila de moderação. Precisa vir ANTES de "/demands/:id", senão "pending" seria lido como id.
+router.get("/demands/pending", requireAdmin, async (req, res) => {
+  try {
+    const demands = await db.select().from(demandsTable)
+      .where(and(eq(demandsTable.isApproved, false), eq(demandsTable.status, "open")))
+      .orderBy(desc(demandsTable.createdAt))
+      .limit(100);
+
+    const catIds = [...new Set(demands.map(d => d.categoryId))];
+    const nbrIds = [...new Set(demands.map(d => d.neighborhoodId))];
+    const [categories, neighborhoods, attachmentsByDemand] = await Promise.all([
+      catIds.length ? db.select().from(categoriesTable).where(inArray(categoriesTable.id, catIds)) : [],
+      nbrIds.length ? db.select().from(neighborhoodsTable).where(inArray(neighborhoodsTable.id, nbrIds)) : [],
+      loadAttachmentMeta("demand", demands.map(d => d.id)),
+    ]);
+    const catMap = Object.fromEntries(categories.map(c => [c.id, c]));
+    const nbrMap = Object.fromEntries(neighborhoods.map(n => [n.id, n]));
+
+    res.json({
+      demands: demands.map(d => formatDemand(d, catMap[d.categoryId], nbrMap[d.neighborhoodId], undefined, false, attachmentsByDemand.get(d.id))),
+      total: demands.length,
     });
   } catch (err) {
     req.log.error(err);
@@ -119,6 +162,10 @@ router.post("/demands", requireAuth, async (req, res) => {
     ]);
     if (!category) return sendValidationError(res, { categoryId: "categoria não encontrada" });
     if (!neighborhood) return sendValidationError(res, { neighborhoodId: "bairro não encontrado" });
+
+    // Equipe publica direto; cidadão entra na fila de moderação.
+    const autoApproved = isStaff(currentUser);
+
     // Demanda + contadores + linha do tempo na mesma transação: ou tudo grava, ou nada.
     const demand = await db.transaction(async (tx) => {
       const [created] = await tx.insert(demandsTable).values({
@@ -127,6 +174,7 @@ router.post("/demands", requireAuth, async (req, res) => {
         authorId: currentUser.id,
         authorName: currentUser.name,
         status: "open",
+        isApproved: autoApproved,
       }).returning();
       await tx.update(neighborhoodsTable).set({ demandsCount: sql`${neighborhoodsTable.demandsCount} + 1` }).where(eq(neighborhoodsTable.id, neighborhoodId));
       await tx.update(categoriesTable).set({ demandsCount: sql`${categoriesTable.demandsCount} + 1` }).where(eq(categoriesTable.id, categoryId));
@@ -134,8 +182,10 @@ router.post("/demands", requireAuth, async (req, res) => {
       await tx.insert(timelineTable).values({ demandId: created.id, event: "Demanda criada", description: "Demanda registrada pelo cidadão", actorName: currentUser.name, actorRole: "citizen", statusTo: "open" });
       return created;
     });
-    // O log de atividade usa outra conexão (e a FK exige a demanda já confirmada), então vem depois do commit.
-    await logActivity({ type: "demand_created", description: `Nova demanda: ${title}`, demandId: demand.id, demandTitle: title, actorName: currentUser.name, neighborhoodName: neighborhood?.name });
+    // O log de atividade (feed público) só sai quando a demanda é publicada.
+    if (autoApproved) {
+      await logActivity({ type: "demand_created", description: `Nova demanda: ${title}`, demandId: demand.id, demandTitle: title, actorName: currentUser.name, neighborhoodName: neighborhood?.name });
+    }
 
     res.status(201).json(formatDemand(demand));
   } catch (err) {
@@ -149,9 +199,9 @@ router.get("/demands/:id", optionalAuth, async (req, res) => {
     const id = parseId(req.params.id);
     if (id === null) return sendValidationError(res, { id: "id inválido" });
     const [demand] = await db.select().from(demandsTable).where(eq(demandsTable.id, id)).limit(1);
-    if (!demand) { res.status(404).json({ error: "Not found" }); return; }
-
     const currentUser = (req as any).currentUser;
+    if (!demand || !canSee(currentUser, demand)) { res.status(404).json({ error: "Not found" }); return; }
+
     let isConfirmedByMe = false;
     if (currentUser) {
       const [conf] = await db.select().from(confirmationsTable).where(and(eq(confirmationsTable.demandId, id), eq(confirmationsTable.userId, currentUser.id))).limit(1);
@@ -240,10 +290,49 @@ router.patch("/demands/:id", requireAdmin, async (req, res) => {
   }
 });
 
-router.get("/demands/:id/timeline", async (req, res) => {
+// Aprova uma demanda pendente: passa a aparecer publicamente e entra no feed de atividade.
+router.patch("/demands/:id/approve", requireAdmin, async (req, res) => {
   try {
     const id = parseId(req.params.id);
     if (id === null) return sendValidationError(res, { id: "id inválido" });
+    const currentUser = (req as any).currentUser as { id: number; role: string; name: string };
+
+    const result = await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(demandsTable).where(eq(demandsTable.id, id)).limit(1).for("update");
+      if (!existing) return null;
+      if (existing.isApproved) return { existing, demand: existing, changed: false };
+      const [updated] = await tx.update(demandsTable).set({ isApproved: true, updatedAt: new Date() }).where(eq(demandsTable.id, id)).returning();
+      await tx.insert(timelineTable).values({
+        demandId: id, event: "Demanda publicada", description: "Demanda aprovada para publicação",
+        actorName: currentUser.name, actorRole: currentUser.role,
+      });
+      return { existing, demand: updated, changed: true };
+    });
+    if (!result) { res.status(404).json({ error: "Not found" }); return; }
+
+    if (result.changed) {
+      const [neighborhood] = await db.select({ name: neighborhoodsTable.name }).from(neighborhoodsTable).where(eq(neighborhoodsTable.id, result.existing.neighborhoodId)).limit(1);
+      await logActivity({
+        type: "demand_created", description: `Nova demanda: ${result.existing.title}`,
+        demandId: id, demandTitle: result.existing.title,
+        actorName: result.existing.authorName, neighborhoodName: neighborhood?.name,
+      });
+    }
+
+    res.json(formatDemand(result.demand));
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get("/demands/:id/timeline", optionalAuth, async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return sendValidationError(res, { id: "id inválido" });
+    const [demand] = await db.select({ isApproved: demandsTable.isApproved, authorId: demandsTable.authorId })
+      .from(demandsTable).where(eq(demandsTable.id, id)).limit(1);
+    if (!demand || !canSee((req as any).currentUser, demand)) { res.json([]); return; }
     const events = await db.select().from(timelineTable)
       .where(and(eq(timelineTable.demandId, id), eq(timelineTable.isPublic, true)))
       .orderBy(timelineTable.createdAt);
