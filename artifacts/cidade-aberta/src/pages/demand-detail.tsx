@@ -77,6 +77,26 @@ export default function DemandDetail() {
     }
   };
 
+    const handleShare = async () => {
+    const url = window.location.href;
+    const title = demand?.title ?? "Demanda";
+    const text = `${title} - veja e apoie essa demanda no Cidade Aberta`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, text, url });
+      } catch {
+        // usuário cancelou
+      }
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      toast({ title: "Link copiado", description: "Cole onde quiser compartilhar." });
+    } catch {
+      toast({ title: "Não foi possível copiar", description: url });
+    }
+  };
+  
   const handleConfirmToggle = () => {
     if (!isAuthenticated) {
       toast({ title: "Faça login", description: "Você precisa estar logado para apoiar uma demanda." });
