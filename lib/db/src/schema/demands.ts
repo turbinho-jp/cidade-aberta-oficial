@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, real, timestamp, pgEnum, index, check } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, real, boolean, timestamp, pgEnum, index, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { categoriesTable } from "./categories";
 import { neighborhoodsTable } from "./neighborhoods";
@@ -31,6 +31,7 @@ export const demandsTable = pgTable("demands", {
   authorId: integer("author_id").notNull().references(() => usersTable.id, { onDelete: "restrict" }),
   authorName: text("author_name").notNull(),
   publicResponse: text("public_response"),
+  isApproved: boolean("is_approved").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [
