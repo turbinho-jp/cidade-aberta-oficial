@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { StatusBadge } from "@/components/status-badge";
 import { DemandStatus } from "@workspace/api-client-react";
 import { CategoryIcon } from "@/components/category-icon";
-import { Search, Loader2, MapPin, AlertTriangle } from "lucide-react";
+import { Search, Loader2, MapPin, AlertTriangle, Megaphone } from "lucide-react";
 import { JOAO_PESSOA_CENTER, DEFAULT_ZOOM, isInsideServiceArea } from "@/lib/geo";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
