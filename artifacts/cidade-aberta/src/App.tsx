@@ -26,7 +26,8 @@ const queryClient = new QueryClient();
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
+      <Route path="/" component={MapPage} />
+      <Route path="/inicio" component={Home} />
       <Route path="/mapa" component={MapPage} />
       <Route path="/demandas" component={DemandsList} />
       <Route path="/demandas/nova" component={DemandCreate} />
