@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MapPin, ThumbsUp, Calendar, AlertCircle, HardHat, FileText, CheckCircle2, Clock, Send, ShieldAlert } from "lucide-react";
+import { MapPin, ThumbsUp, Calendar, AlertCircle, HardHat, FileText, CheckCircle2, Clock, Send, ShieldAlert, Share2 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
