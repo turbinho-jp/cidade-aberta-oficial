@@ -77,7 +77,7 @@ export default function DemandDetail() {
     }
   };
 
-    const handleShare = async () => {
+  const handleShare = async () => {
     const url = window.location.href;
     const title = demand?.title ?? "Demanda";
     const text = `${title} - veja e apoie essa demanda no Cidade Aberta`;
@@ -96,7 +96,7 @@ export default function DemandDetail() {
       toast({ title: "Não foi possível copiar", description: url });
     }
   };
-  
+
   const handleConfirmToggle = () => {
     if (!isAuthenticated) {
       toast({ title: "Faça login", description: "Você precisa estar logado para apoiar uma demanda." });
@@ -346,6 +346,7 @@ export default function DemandDetail() {
                   <ThumbsUp className={`w-5 h-5 mr-2 ${demand.isConfirmedByMe ? 'fill-current' : ''}`} />
                   {demand.isConfirmedByMe ? "Apoio Registrado" : "Também me afeta"}
                 </Button>
+
                 <Button type="button" variant="outline" size="lg" className="w-full mt-3 font-semibold" onClick={handleShare}>
                   <Share2 className="w-5 h-5 mr-2" />
                   Compartilhar
