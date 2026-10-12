@@ -346,6 +346,10 @@ export default function DemandDetail() {
                   <ThumbsUp className={`w-5 h-5 mr-2 ${demand.isConfirmedByMe ? 'fill-current' : ''}`} />
                   {demand.isConfirmedByMe ? "Apoio Registrado" : "Também me afeta"}
                 </Button>
+                <Button type="button" variant="outline" size="lg" className="w-full mt-3 font-semibold" onClick={handleShare}>
+                  <Share2 className="w-5 h-5 mr-2" />
+                  Compartilhar
+                </Button>
               </CardContent>
             </Card>
 
