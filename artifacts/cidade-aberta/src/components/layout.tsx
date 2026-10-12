@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { 
   Menu, X, Map as MapIcon, Megaphone, 
   BarChart2, HardHat, Building2, UserCircle, LogOut, 
-  Settings, LogIn, UserPlus
+  Settings, LogIn, UserPlus, ShieldCheck
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -78,6 +78,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     </Button>
                   </Link>
                 )}
+                {(isAdmin || isSecretary) && (
+                  <Link href="/admin/moderacao">
+                    <Button variant="outline" size="sm" className="gap-2">
+                      <ShieldCheck className="w-4 h-4" />
+                      Moderação
+                    </Button>
+                  </Link>
+                )}
                 <Link href={`/perfil/${user?.id}`}>
                   <Button variant="ghost" size="sm" className="gap-2">
                     <UserCircle className="w-5 h-5" />
@@ -144,6 +152,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     <Button variant="outline" className="w-full justify-start text-base mb-2" size="lg">
                       <Settings className="w-5 h-5 mr-3" />
                       Painel de Gestão
+                    </Button>
+                  </Link>
+                )}
+                {(isAdmin || isSecretary) && (
+                  <Link href="/admin/moderacao" onClick={() => setIsMobileMenuOpen(false)}>
+                    <Button variant="outline" className="w-full justify-start text-base mb-2" size="lg">
+                      <ShieldCheck className="w-5 h-5 mr-3" />
+                      Moderação
                     </Button>
                   </Link>
                 )}
