@@ -180,7 +180,17 @@ export default function MapPage() {
                   </Popup>
                 </Marker>
             ))}
-          </MapContainer>
+                    </MapContainer>
+
+          <Link href="/demandas/nova" className="absolute bottom-6 right-4 z-[1000]">
+            <Button size="lg" className="rounded-full shadow-lg font-bold gap-2">
+              <Megaphone className="w-5 h-5" />
+              Reportar problema
+            </Button>
+          </Link>
+        </div>
+      </div>
+    </Layout>
         </div>
       </div>
     </Layout>
