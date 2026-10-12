@@ -20,6 +20,7 @@ import Login from "@/pages/login";
 import Register from "@/pages/register";
 import AdminDashboard from "@/pages/admin-dashboard";
 import AdminServiceOrders from "@/pages/admin-service-orders";
+import AdminModeration from "@/pages/admin-moderation";
 
 const queryClient = new QueryClient();
 
@@ -41,6 +42,7 @@ function Router() {
       
       <Route path="/admin" component={AdminDashboard} />
       <Route path="/admin/ordens" component={AdminServiceOrders} />
+      <Route path="/admin/moderacao" component={AdminModeration} />
 
       <Route path="/login" component={Login} />
       <Route path="/cadastro" component={Register} />
