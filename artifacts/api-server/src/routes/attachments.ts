@@ -12,7 +12,8 @@
 import express, { Router } from "express";
 import { db, attachmentsTable, demandsTable, publicWorksTable } from "@workspace/db";
 import { and, eq, gt, inArray, sql } from "drizzle-orm";
-import { requireAuth, requireAdmin, type SessionUser } from "../lib/auth";
+import { requireAuth, requireAdmin, optionalAuth, type SessionUser } from "../lib/auth";
+import { canSee } from "../lib/visibility";
 import { parseId, sendValidationError } from "../lib/validate";
 import { ALLOWED_IMAGE_TYPES, sniffImageType, stripJpegMetadata } from "../lib/images";
 
@@ -157,21 +158,35 @@ router.post("/public-works/:id/attachments", requireAdmin, rawImage, async (req,
   }
 });
 
-router.get("/attachments/:id", async (req, res) => {
+router.get("/attachments/:id", optionalAuth, async (req, res) => {
   try {
     const id = parseId(req.params.id);
     if (id === null) return sendValidationError(res, { id: "id inválido" });
     const [att] = await db
-      .select({ data: attachmentsTable.data, mimeType: attachmentsTable.mimeType })
+      .select({
+        data: attachmentsTable.data,
+        mimeType: attachmentsTable.mimeType,
+        demandId: attachmentsTable.demandId,
+        demandApproved: demandsTable.isApproved,
+        demandAuthorId: demandsTable.authorId,
+      })
       .from(attachmentsTable)
+      .leftJoin(demandsTable, eq(attachmentsTable.demandId, demandsTable.id))
       .where(eq(attachmentsTable.id, id))
       .limit(1);
     if (!att) { res.status(404).json({ error: "Not found" }); return; }
+    // Moderação: foto de demanda pendente só para o autor e a gestão. 404 (não 403) para não
+    // revelar que o anexo existe.
+    const restricted = att.demandId !== null && att.demandApproved === false;
+    if (restricted && !canSee((req as any).currentUser, { isApproved: false, authorId: att.demandAuthorId ?? -1 })) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
     res.set({
       "Content-Type": att.mimeType,
       "Content-Length": String(att.data.length),
-      // Um anexo nunca muda (só é criado ou apagado): cache longo no navegador e na CDN.
-      "Cache-Control": "public, max-age=31536000, immutable",
+      // Publicada: o anexo nunca muda (só é criado ou apagado), cache longo. Pendente: nunca guardar.
+      "Cache-Control": restricted ? "private, no-store" : "public, max-age=31536000, immutable",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "default-src 'none'; sandbox",
     });

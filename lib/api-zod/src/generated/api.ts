@@ -997,8 +997,8 @@ export const GetDashboardSummaryResponse = zod.object({
   "resolvedDemands": zod.number(),
   "rejectedDemands": zod.number().optional(),
   "totalCitizens": zod.number(),
-  "avgResponseDays": zod.number().optional(),
-  "avgResolutionDays": zod.number(),
+  "avgResponseDays": zod.number().nullish(),
+  "avgResolutionDays": zod.number().nullable(),
   "totalConfirmations": zod.number(),
   "totalComments": zod.number(),
   "resolutionRate": zod.number().optional()

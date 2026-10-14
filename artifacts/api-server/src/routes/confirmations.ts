@@ -4,6 +4,7 @@ import { eq, and, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth";
 import { parseId, sendValidationError } from "../lib/validate";
 import { logActivity } from "../lib/activity";
+import { canSee } from "../lib/visibility";
 
 const router = Router();
 
@@ -14,8 +15,9 @@ router.post("/demands/:id/confirm", requireAuth, async (req, res) => {
     const demandId = parseId(req.params.id);
     if (demandId === null) return sendValidationError(res, { id: "id inválido" });
     const currentUser = (req as any).currentUser;
-    const [target] = await db.select({ id: demandsTable.id }).from(demandsTable).where(eq(demandsTable.id, demandId)).limit(1);
-    if (!target) { res.status(404).json({ error: "Not found" }); return; }
+    const [target] = await db.select({ id: demandsTable.id, isApproved: demandsTable.isApproved, authorId: demandsTable.authorId })
+      .from(demandsTable).where(eq(demandsTable.id, demandId)).limit(1);
+    if (!target || !canSee(currentUser, target)) { res.status(404).json({ error: "Not found" }); return; }
 
     // A unicidade (demand_id, user_id) é garantida pelo banco: dois cliques/requisições
     // simultâneas resultam em UMA confirmação, e só quem realmente inseriu mexe nos contadores.
@@ -40,7 +42,8 @@ router.post("/demands/:id/confirm", requireAuth, async (req, res) => {
     });
 
     // Fora da transação: logActivity usa outra conexão e só enxerga dados já confirmados.
-    if (result.created) {
+    // O feed é público: não registra atividade de demanda ainda não aprovada.
+    if (result.created && result.demand?.isApproved) {
       await logActivity({ type: "confirmation_added", description: `Nova confirmação em: ${result.demand?.title}`, demandId, demandTitle: result.demand?.title, actorName: currentUser.name });
     }
     res.json({ confirmed: true, total: result.demand?.confirmationsCount ?? 0 });
