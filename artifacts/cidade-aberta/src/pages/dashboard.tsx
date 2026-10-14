@@ -61,8 +61,8 @@ export default function Dashboard() {
             <CardContent>
               {loadingSummary ? <Skeleton className="h-8 w-20" /> : (
                 <>
-                  <div className="text-2xl font-bold">{summary?.avgResolutionDays?.toFixed(0) || 0} dias</div>
-                  <p className="text-xs text-muted-foreground mt-1">Para resolução final</p>
+                  <div className="text-2xl font-bold">{summary?.avgResolutionDays != null ? `${summary.avgResolutionDays.toFixed(1).replace(".", ",")} dias` : "—"}</div>
+                  <p className="text-xs text-muted-foreground mt-1">{summary?.avgResolutionDays != null ? "Para resolução final" : "Ainda sem demandas concluídas"}</p>
                 </>
               )}
             </CardContent>
@@ -85,7 +85,7 @@ export default function Dashboard() {
 
           <Card className="hover-elevate">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Cidadãos Ativos</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Cidadãos Cadastrados</CardTitle>
               <Users className="h-4 w-4 text-primary" />
             </CardHeader>
             <CardContent>
@@ -115,8 +115,8 @@ export default function Dashboard() {
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={byNeighborhood?.slice(0, 10)} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                        <XAxis dataKey="neighborhoodName" tick={{fontSize: 12}} tickLine={false} axisLine={false} />
-                        <YAxis tick={{fontSize: 12}} tickLine={false} axisLine={false} />
+                        <XAxis dataKey="neighborhoodName" tick={{fontSize: 12}} tickLine={false} axisLine={false} interval={0} />
+                        <YAxis tick={{fontSize: 12}} tickLine={false} axisLine={false} allowDecimals={false} />
                         <Tooltip 
                           cursor={{fill: 'rgba(0,0,0,0.05)'}}
                           contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}

@@ -3,6 +3,8 @@ import { db, demandsTable, categoriesTable, neighborhoodsTable, departmentsTable
 import { eq, and, or, sql, ilike, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireAdmin, optionalAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
+import { isManager as isStaff, visibleTo, canSee } from "../lib/visibility";
+import { publicName, publicNameOrNull } from "../lib/public-name";
 import { syncNeighborhoodCounters, syncDepartmentCounters } from "../lib/counters";
 import { loadAttachmentMeta, type AttachmentMeta } from "./attachments";
 import { serviceAreaLat, serviceAreaLng } from "../lib/geo";
@@ -15,15 +17,6 @@ const router = Router();
 
 // Moderação: demanda de cidadão nasce pendente (is_approved = false) e só aparece
 // publicamente depois da aprovação. O autor e a equipe (admin/secretário) sempre a enxergam.
-const isStaff = (u: any) => !!u && (u.role === "admin" || u.role === "secretary");
-const visibleTo = (u: any) =>
-  isStaff(u)
-    ? undefined
-    : u
-      ? or(eq(demandsTable.isApproved, true), eq(demandsTable.authorId, u.id))
-      : eq(demandsTable.isApproved, true);
-const canSee = (u: any, d: { isApproved: boolean; authorId: number }) =>
-  d.isApproved || isStaff(u) || (!!u && u.id === d.authorId);
 
 function formatDemand(d: any, category?: any, neighborhood?: any, department?: any, isConfirmedByMe = false, attachments: AttachmentMeta[] = []) {
   return {
@@ -47,7 +40,7 @@ function formatDemand(d: any, category?: any, neighborhood?: any, department?: a
     commentsCount: d.commentsCount,
     isConfirmedByMe,
     authorId: d.authorId,
-    authorName: d.authorName,
+    authorName: publicName(d.authorName),
     publicResponse: d.publicResponse,
     isApproved: d.isApproved,
     createdAt: d.createdAt.toISOString(),
@@ -77,7 +70,10 @@ router.get("/demands", optionalAuth, async (req, res) => {
     if (categoryId) conditions.push(eq(demandsTable.categoryId, categoryId));
     if (neighborhoodId) conditions.push(eq(demandsTable.neighborhoodId, neighborhoodId));
     if (departmentId) conditions.push(eq(demandsTable.departmentId, departmentId));
-    if (search) conditions.push(ilike(demandsTable.title, `%${escapeLike(search)}%`));
+    if (search) {
+      const pattern = `%${escapeLike(search)}%`;
+      conditions.push(or(ilike(demandsTable.title, pattern), ilike(demandsTable.description, pattern)));
+    }
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
     const [demands, [{ count }]] = await Promise.all([
@@ -225,7 +221,7 @@ router.get("/demands/:id", optionalAuth, async (req, res) => {
       ...formatDemand(demand, categories[0], neighborhoods[0], departments[0], isConfirmedByMe, attachmentsByDemand.get(id)),
       timeline: timeline.map(t => ({
         id: t.id, demandId: t.demandId, event: t.event, description: t.description,
-        actorName: t.actorName, actorRole: t.actorRole, statusFrom: t.statusFrom,
+        actorName: t.actorRole === "citizen" ? publicNameOrNull(t.actorName) : t.actorName, actorRole: t.actorRole, statusFrom: t.statusFrom,
         statusTo: t.statusTo, isPublic: t.isPublic, createdAt: t.createdAt.toISOString(),
       })),
       serviceOrders: serviceOrders.map(o => ({
@@ -338,7 +334,7 @@ router.get("/demands/:id/timeline", optionalAuth, async (req, res) => {
       .orderBy(timelineTable.createdAt);
     res.json(events.map(t => ({
       id: t.id, demandId: t.demandId, event: t.event, description: t.description,
-      actorName: t.actorName, actorRole: t.actorRole, statusFrom: t.statusFrom,
+      actorName: t.actorRole === "citizen" ? publicNameOrNull(t.actorName) : t.actorName, actorRole: t.actorRole, statusFrom: t.statusFrom,
       statusTo: t.statusTo, isPublic: t.isPublic, createdAt: t.createdAt.toISOString(),
     })));
   } catch (err) {

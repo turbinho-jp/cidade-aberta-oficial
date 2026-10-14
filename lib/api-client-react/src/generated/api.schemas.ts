@@ -512,8 +512,8 @@ export interface DashboardSummary {
   resolvedDemands: number;
   rejectedDemands?: number;
   totalCitizens: number;
-  avgResponseDays?: number;
-  avgResolutionDays: number;
+  avgResponseDays?: number | null;
+  avgResolutionDays: number | null;
   totalConfirmations: number;
   totalComments: number;
   resolutionRate?: number;

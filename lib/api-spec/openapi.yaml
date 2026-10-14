@@ -1390,9 +1390,9 @@ components:
         totalCitizens:
           type: integer
         avgResponseDays:
-          type: number
+          type: ["number", "null"]
         avgResolutionDays:
-          type: number
+          type: ["number", "null"]
         totalConfirmations:
           type: integer
         totalComments:

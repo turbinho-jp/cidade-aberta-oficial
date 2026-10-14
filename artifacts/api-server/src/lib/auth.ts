@@ -148,8 +148,17 @@ export const requireAdmin = requireRole(...MANAGEMENT_ROLES);
 /** Equipe da prefeitura, incluindo moderadores. */
 export const requireStaff = requireRole(...STAFF_ROLES);
 
-/** Preenche `req.currentUser` quando há sessão válida, sem bloquear anônimos. */
-export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
-  (req as any).currentUser = getUserFromCookie(req);
+/**
+ * Preenche `req.currentUser` quando há sessão válida, sem bloquear anônimos. O usuário e o papel
+ * vêm do banco (como em `requireAuth`): admin rebaixado ou conta removida perde o acesso na hora,
+ * em vez de valer até o cookie expirar. Se o banco falhar, trata como anônimo (nunca como staff).
+ */
+export async function optionalAuth(req: Request, _res: Response, next: NextFunction) {
+  try {
+    (req as any).currentUser = await loadCurrentUser(req);
+  } catch (err) {
+    req.log?.error(err);
+    (req as any).currentUser = null;
+  }
   next();
 }
