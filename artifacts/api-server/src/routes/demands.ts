@@ -5,7 +5,7 @@ import { requireAuth, requireAdmin, optionalAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
 import { isManager as isStaff, visibleTo, canSee } from "../lib/visibility";
 import { publicName, publicNameOrNull } from "../lib/public-name";
-import { syncNeighborhoodCounters, syncDepartmentCounters } from "../lib/counters";
+import { syncNeighborhoodCounters, syncDepartmentCounters, type Tx } from "../lib/counters";
 import { loadAttachmentMeta, type AttachmentMeta } from "./attachments";
 import { serviceAreaLat, serviceAreaLng } from "../lib/geo";
 import {
@@ -17,6 +17,19 @@ const router = Router();
 
 // Moderação: demanda de cidadão nasce pendente (is_approved = false) e só aparece
 // publicamente depois da aprovação. O autor e a equipe (admin/secretário) sempre a enxergam.
+
+const POINTS_PER_DEMAND = 10;
+
+/**
+ * Efeitos de uma demanda se tornar pública: contadores de bairro/categoria e pontos do autor.
+ * Chamar UMA vez por demanda, dentro da transação, depois de gravar `is_approved = true`
+ * (na criação por equipe ou na aprovação de uma pendente).
+ */
+async function creditPublication(tx: Tx, d: { id: number; neighborhoodId: number; categoryId: number; authorId: number }) {
+  await syncNeighborhoodCounters(tx, [d.neighborhoodId]);
+  await tx.update(categoriesTable).set({ demandsCount: sql`${categoriesTable.demandsCount} + 1` }).where(eq(categoriesTable.id, d.categoryId));
+  await tx.update(usersTable).set({ points: sql`${usersTable.points} + ${POINTS_PER_DEMAND}` }).where(eq(usersTable.id, d.authorId));
+}
 
 function formatDemand(d: any, category?: any, neighborhood?: any, department?: any, isConfirmedByMe = false, attachments: AttachmentMeta[] = []) {
   return {
@@ -172,9 +185,10 @@ router.post("/demands", requireAuth, async (req, res) => {
         status: "open",
         isApproved: autoApproved,
       }).returning();
-      await tx.update(neighborhoodsTable).set({ demandsCount: sql`${neighborhoodsTable.demandsCount} + 1` }).where(eq(neighborhoodsTable.id, neighborhoodId));
-      await tx.update(categoriesTable).set({ demandsCount: sql`${categoriesTable.demandsCount} + 1` }).where(eq(categoriesTable.id, categoryId));
-      await tx.update(usersTable).set({ demandsCount: sql`${usersTable.demandsCount} + 1`, points: sql`${usersTable.points} + 10` }).where(eq(usersTable.id, currentUser.id));
+      await tx.update(usersTable).set({ demandsCount: sql`${usersTable.demandsCount} + 1` }).where(eq(usersTable.id, currentUser.id));
+      // Contadores públicos (bairro, categoria) e pontos só contam demanda PUBLICADA: para
+      // cidadão isso acontece na aprovação (PATCH /demands/:id/approve), não aqui.
+      if (autoApproved) await creditPublication(tx, created);
       await tx.insert(timelineTable).values({ demandId: created.id, event: "Demanda criada", description: "Demanda registrada pelo cidadão", actorName: currentUser.name, actorRole: "citizen", statusTo: "open" });
       return created;
     });
@@ -298,6 +312,7 @@ router.patch("/demands/:id/approve", requireAdmin, async (req, res) => {
       if (!existing) return null;
       if (existing.isApproved) return { existing, demand: existing, changed: false };
       const [updated] = await tx.update(demandsTable).set({ isApproved: true, updatedAt: new Date() }).where(eq(demandsTable.id, id)).returning();
+      await creditPublication(tx, updated);
       await tx.insert(timelineTable).values({
         demandId: id, event: "Demanda publicada", description: "Demanda aprovada para publicação",
         actorName: currentUser.name, actorRole: currentUser.role,

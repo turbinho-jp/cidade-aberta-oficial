@@ -32,8 +32,8 @@ export async function syncNeighborhoodCounters(tx: Tx, ids: ReadonlyArray<number
     await tx.select({ id: neighborhoodsTable.id }).from(neighborhoodsTable)
       .where(eq(neighborhoodsTable.id, id)).for("update");
     await tx.update(neighborhoodsTable).set({
-      demandsCount: sql`(SELECT count(*)::int FROM ${demandsTable} WHERE ${demandsTable.neighborhoodId} = ${id})`,
-      resolvedCount: sql`(SELECT count(*)::int FROM ${demandsTable} WHERE ${demandsTable.neighborhoodId} = ${id} AND ${demandsTable.status} = 'completed')`,
+      demandsCount: sql`(SELECT count(*)::int FROM ${demandsTable} WHERE ${demandsTable.neighborhoodId} = ${id} AND ${demandsTable.isApproved})`,
+      resolvedCount: sql`(SELECT count(*)::int FROM ${demandsTable} WHERE ${demandsTable.neighborhoodId} = ${id} AND ${demandsTable.isApproved} AND ${demandsTable.status} = 'completed')`,
     }).where(eq(neighborhoodsTable.id, id));
   }
 }
@@ -43,8 +43,8 @@ export async function syncDepartmentCounters(tx: Tx, ids: ReadonlyArray<number |
     await tx.select({ id: departmentsTable.id }).from(departmentsTable)
       .where(eq(departmentsTable.id, id)).for("update");
     await tx.update(departmentsTable).set({
-      demandsCount: sql`(SELECT count(*)::int FROM ${demandsTable} WHERE ${demandsTable.departmentId} = ${id})`,
-      resolvedCount: sql`(SELECT count(*)::int FROM ${demandsTable} WHERE ${demandsTable.departmentId} = ${id} AND ${demandsTable.status} = 'completed')`,
+      demandsCount: sql`(SELECT count(*)::int FROM ${demandsTable} WHERE ${demandsTable.departmentId} = ${id} AND ${demandsTable.isApproved})`,
+      resolvedCount: sql`(SELECT count(*)::int FROM ${demandsTable} WHERE ${demandsTable.departmentId} = ${id} AND ${demandsTable.isApproved} AND ${demandsTable.status} = 'completed')`,
     }).where(eq(departmentsTable.id, id));
   }
 }

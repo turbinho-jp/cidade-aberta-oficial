@@ -46,8 +46,8 @@ export default function Dashboard() {
             <CardContent>
               {loadingSummary ? <Skeleton className="h-8 w-20" /> : (
                 <>
-                  <div className="text-2xl font-bold">{summary?.resolutionRate?.toFixed(1) || 0}%</div>
-                  <p className="text-xs text-muted-foreground mt-1">Das demandas concluídas</p>
+                  <div className="text-2xl font-bold">{(summary?.totalDemands ?? 0) > 0 ? `${(summary?.resolutionRate ?? 0).toFixed(1).replace(".", ",")}%` : "—"}</div>
+                  <p className="text-xs text-muted-foreground mt-1">{(summary?.totalDemands ?? 0) > 0 ? "Das demandas concluídas" : "Ainda sem demandas publicadas"}</p>
                 </>
               )}
             </CardContent>
@@ -110,6 +110,8 @@ export default function Dashboard() {
               <CardContent className="pl-0">
                 {loadingNeighborhoods ? (
                   <Skeleton className="h-[300px] w-full ml-4" />
+                ) : !byNeighborhood || byNeighborhood.length === 0 ? (
+                  <p className="h-[300px] flex items-center justify-center text-sm text-muted-foreground px-4 text-center">Ainda sem demandas publicadas nos bairros.</p>
                 ) : (
                   <div className="h-[300px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
@@ -138,12 +140,14 @@ export default function Dashboard() {
                 <CardContent className="flex justify-center">
                   {loadingCategories ? (
                     <Skeleton className="h-[250px] w-[250px] rounded-full" />
+                  ) : !pieData.some(p => p.value > 0) ? (
+                    <p className="h-[250px] flex items-center justify-center text-sm text-muted-foreground text-center">Ainda sem demandas publicadas.</p>
                   ) : (
                     <div className="h-[250px] w-full">
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie
-                            data={pieData}
+                            data={pieData.filter(p => p.value > 0)}
                             cx="50%"
                             cy="50%"
                             innerRadius={60}
@@ -151,7 +155,7 @@ export default function Dashboard() {
                             paddingAngle={5}
                             dataKey="value"
                           >
-                            {pieData.map((entry, index) => (
+                            {pieData.filter(p => p.value > 0).map((entry, index) => (
                               <Cell key={`cell-${index}`} fill={entry.color} />
                             ))}
                           </Pie>
@@ -176,7 +180,9 @@ export default function Dashboard() {
                       Array.from({ length: 5 }).map((_, i) => (
                         <div key={i} className="flex items-center gap-3"><Skeleton className="w-8 h-8 rounded-full" /><Skeleton className="h-4 flex-1" /></div>
                       ))
-                    ) : ranking?.map((user, idx) => (
+                    ) : !ranking || ranking.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">Ainda sem pontuação. Reporte ou confirme uma demanda para entrar no ranking.</p>
+                    ) : ranking.map((user, idx) => (
                       <Link key={user.userId} href={`/perfil/${user.userId}`} className="flex items-center justify-between p-2 rounded-lg hover:bg-muted/50 transition-colors">
                         <div className="flex items-center gap-3">
                           <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${idx === 0 ? 'bg-amber-100 text-amber-700' : idx === 1 ? 'bg-slate-200 text-slate-700' : idx === 2 ? 'bg-orange-100 text-orange-800' : 'bg-muted text-muted-foreground'}`}>
@@ -214,7 +220,9 @@ export default function Dashboard() {
                     Array.from({ length: 5 }).map((_, i) => (
                       <div key={i} className="flex gap-4"><Skeleton className="h-6 w-6 rounded-full" /><Skeleton className="h-16 w-full" /></div>
                     ))
-                  ) : recentActivity?.map(event => (
+                  ) : !recentActivity || recentActivity.length === 0 ? (
+                    <p className="text-sm text-muted-foreground pl-8">Ainda sem atividade pública.</p>
+                  ) : recentActivity.map(event => (
                     <div key={event.id} className="relative flex gap-4 pl-8">
                       <div className="absolute left-0 w-6 h-6 rounded-full bg-background border-2 border-primary z-10 flex items-center justify-center">
                         <div className="w-2 h-2 rounded-full bg-primary" />

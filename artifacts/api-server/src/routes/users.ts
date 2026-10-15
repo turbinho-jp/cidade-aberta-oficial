@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, usersTable, demandsTable, categoriesTable, neighborhoodsTable } from "@workspace/db";
-import { eq, desc, inArray, and } from "drizzle-orm";
+import { eq, desc, inArray, notInArray, gt, and } from "drizzle-orm";
 import { optionalAuth } from "../lib/auth";
 import { visibleTo } from "../lib/visibility";
 import { publicName } from "../lib/public-name";
@@ -54,7 +54,9 @@ router.get("/users/ranking", async (req, res) => {
   try {
     const q = parseQuery(req.query, { limit: paginationFields(100).limit });
     if (!q.ok) return sendValidationError(res, q.errors);
+    // Ranking público de cidadãos: sem contas da prefeitura e sem quem ainda não pontuou.
     const users = await db.select().from(usersTable)
+      .where(and(notInArray(usersTable.role, ["admin", "secretary", "moderator"]), gt(usersTable.points, 0)))
       .orderBy(desc(usersTable.points)).limit(q.value.limit ?? 20);
     res.json(users.map((u, i) => ({
       userId: u.id, name: publicName(u.name), avatarUrl: u.avatarUrl,
