@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, demandsTable, usersTable, activityLogTable } from "@workspace/db";
-import { sql, desc, eq } from "drizzle-orm";
+import { sql, desc, eq, or, isNull } from "drizzle-orm";
 import { parseQuery, sendValidationError, paginationFields } from "../lib/validate";
 import { publicName } from "../lib/public-name";
 
@@ -117,7 +117,14 @@ router.get("/dashboard/recent-activity", async (req, res) => {
   try {
     const q = parseQuery(req.query, { limit: paginationFields(100).limit });
     if (!q.ok) return sendValidationError(res, q.errors);
-    const events = await db.select().from(activityLogTable).orderBy(desc(activityLogTable.createdAt)).limit(q.value.limit ?? 20);
+    // Feed público: confere a aprovação NA LEITURA. Eventos gravados quando a demanda estava
+    // aprovada somem do feed se ela for reprovada depois. Evento sem demanda ligada continua visível.
+    const rows = await db.select({ event: activityLogTable })
+      .from(activityLogTable)
+      .leftJoin(demandsTable, eq(demandsTable.id, activityLogTable.demandId))
+      .where(or(isNull(activityLogTable.demandId), eq(demandsTable.isApproved, true)))
+      .orderBy(desc(activityLogTable.createdAt)).limit(q.value.limit ?? 20);
+    const events = rows.map(r => r.event);
     res.json(events.map(e => ({
       id: e.id, type: e.type, description: e.description,
       demandId: e.demandId, demandTitle: e.demandTitle,
