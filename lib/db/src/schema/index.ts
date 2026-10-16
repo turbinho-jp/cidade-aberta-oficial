@@ -11,3 +11,4 @@ export * from "./service_orders";
 export * from "./public_works";
 export * from "./activity_log";
 export * from "./attachments";
+export * from "./auth_attempts";

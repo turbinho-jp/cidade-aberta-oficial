@@ -13,7 +13,7 @@ import { Link } from "wouter";
 const registerSchema = z.object({
   name: z.string().min(2, "Nome deve ter no mínimo 2 caracteres"),
   email: z.string().email("E-mail inválido"),
-  password: z.string().min(6, "A senha deve ter no mínimo 6 caracteres"),
+  password: z.string().min(8, "A senha deve ter no mínimo 8 caracteres"),
 });
 
 export default function Register() {
@@ -32,8 +32,13 @@ export default function Register() {
         toast({ title: "Conta criada com sucesso!", description: "Bem-vindo ao Cidade Aberta." });
         setLocation("/");
       },
-      onError: () => {
-        toast({ title: "Erro ao criar conta", description: "Verifique os dados ou se o email já existe.", variant: "destructive" });
+      onError: (err: any) => {
+        const tooMany = err?.status === 429;
+        toast({
+          title: "Erro ao criar conta",
+          description: tooMany ? "Muitas tentativas. Tente de novo mais tarde." : "Verifique os dados ou se o email já existe.",
+          variant: "destructive",
+        });
       }
     });
   };
