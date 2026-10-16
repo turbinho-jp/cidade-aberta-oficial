@@ -70,12 +70,6 @@ _Populate as you build — explicit user instructions worth remembering across s
 - `react-leaflet` and `leaflet` must be installed in cidade-aberta package (not in workspace root)
 - The 401 from `/api/auth/me` on page load is expected for unauthenticated users
 
-## Seed accounts
-
-- Admin: `admin@cidadeaberta.gov.br` / `senha123`
-- Secretary: `infra@prefeitura.gov.br` / `senha123`
-- Citizens: `maria@email.com`, `joao@email.com`, `ana@email.com`, `carlos@email.com` / `senha123`
-
 ## Pointers
 
 - See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
