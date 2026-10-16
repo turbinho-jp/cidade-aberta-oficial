@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { createHash } from "crypto";
+import { createHash, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "crypto";
 
 export const AUTH_COOKIE = "auth";
 
@@ -40,8 +40,69 @@ export function getSessionSecret(): string {
   return secret;
 }
 
-export function hashPassword(password: string): string {
+// ---- Senhas ---------------------------------------------------------------------------------
+// Formato novo: "scrypt$N$r$p$<salt hex>$<hash hex>" (salt aleatório por usuário; parâmetros ficam
+// gravados, então dá para aumentar o custo no futuro sem invalidar senhas antigas).
+// Formato legado: SHA-256 hex com salt fixo. Ainda é aceito no login, e a senha é regravada em
+// scrypt assim que a pessoa entra (ver routes/auth.ts). Nunca é usado para gravar uma senha nova.
+const SCRYPT_N = 16384;
+const SCRYPT_R = 8;
+const SCRYPT_P = 1;
+const KEY_LEN = 64;
+
+function scryptAsync(password: string, salt: Buffer, keylen: number, opts: ScryptOptions): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, keylen, opts, (err, key) => (err ? reject(err) : resolve(key)));
+  });
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16);
+  const key = await scryptAsync(password, salt, KEY_LEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P });
+  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString("hex")}$${key.toString("hex")}`;
+}
+
+function legacyHash(password: string): string {
   return createHash("sha256").update(password + "cidade-aberta-salt").digest("hex");
+}
+
+function safeEqualHex(a: string, b: string): boolean {
+  const ba = Buffer.from(a, "hex");
+  const bb = Buffer.from(b, "hex");
+  return ba.length > 0 && ba.length === bb.length && timingSafeEqual(ba, bb);
+}
+
+// Hash de uma senha qualquer, usado quando o e-mail não existe: gasta o mesmo tempo de uma
+// conferência real, para o tempo de resposta não revelar quais e-mails têm conta.
+let dummyHashPromise: Promise<string> | null = null;
+const dummyHash = () => (dummyHashPromise ??= hashPassword(randomBytes(16).toString("hex")));
+
+export async function verifyPassword(
+  password: string,
+  stored: string | null | undefined,
+): Promise<{ ok: boolean; needsRehash: boolean }> {
+  if (!stored) {
+    await verifyPassword(password, await dummyHash());
+    return { ok: false, needsRehash: false };
+  }
+  if (stored.startsWith("scrypt$")) {
+    const [, n, r, p, saltHex, hashHex] = stored.split("$");
+    const N = Number(n), R = Number(r), P = Number(p);
+    if (!saltHex || !hashHex || !Number.isInteger(N) || !Number.isInteger(R) || !Number.isInteger(P)) {
+      return { ok: false, needsRehash: false };
+    }
+    const expected = Buffer.from(hashHex, "hex");
+    try {
+      const key = await scryptAsync(password, Buffer.from(saltHex, "hex"), expected.length, { N, r: R, p: P });
+      const ok = expected.length > 0 && key.length === expected.length && timingSafeEqual(key, expected);
+      const weaker = N < SCRYPT_N || R < SCRYPT_R || P < SCRYPT_P;
+      return { ok, needsRehash: ok && weaker };
+    } catch {
+      return { ok: false, needsRehash: false };
+    }
+  }
+  const ok = safeEqualHex(legacyHash(password), stored);
+  return { ok, needsRehash: ok };
 }
 
 /**

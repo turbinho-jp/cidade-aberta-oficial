@@ -1,21 +1,31 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { db, usersTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
-import { hashPassword, setAuthCookie, clearAuthCookie, getUserFromCookie } from "../lib/auth";
+import { hashPassword, verifyPassword, setAuthCookie, clearAuthCookie, getUserFromCookie } from "../lib/auth";
+import { isLoginBlocked, recordLoginFailure, registerAttemptBlocked } from "../lib/rate-limit";
 import { parseBody, sendValidationError, text, email, optional } from "../lib/validate";
 
 const router = Router();
+
+// `trust proxy` está ligado em app.ts, então req.ip é o IP do cliente atrás da Vercel.
+const clientIp = (req: Request) => req.ip || "unknown";
 
 router.post("/auth/register", async (req, res) => {
   try {
     const body = parseBody(req.body, {
       name: text({ min: 2, max: 100 }),
       email: email(),
-      password: text({ min: 6, max: 128, trim: false }),
+      password: text({ min: 8, max: 128, trim: false }),
       phone: optional(text({ min: 3, max: 30 }), { blankAsMissing: true }),
     });
     if (!body.ok) return sendValidationError(res, body.errors);
     const { name, email: userEmail, password, phone } = body.value;
+
+    if (await registerAttemptBlocked(clientIp(req))) {
+      res.setHeader("Retry-After", "3600");
+      res.status(429).json({ error: "Too many requests" });
+      return;
+    }
 
     const existing = await db.select({ id: usersTable.id }).from(usersTable)
       .where(sql`lower(${usersTable.email}) = ${userEmail}`).limit(1);
@@ -23,7 +33,7 @@ router.post("/auth/register", async (req, res) => {
       res.status(400).json({ error: "Email already registered" });
       return;
     }
-    const passwordHash = hashPassword(password);
+    const passwordHash = await hashPassword(password);
     const [user] = await db.insert(usersTable).values({
       name,
       email: userEmail,
@@ -59,11 +69,23 @@ router.post("/auth/login", async (req, res) => {
     });
     if (!body.ok) return sendValidationError(res, body.errors);
     const { email: userEmail, password } = body.value;
+    const ip = clientIp(req);
+    if (await isLoginBlocked(userEmail, ip)) {
+      res.setHeader("Retry-After", "900");
+      res.status(429).json({ error: "Too many attempts" });
+      return;
+    }
     const [user] = await db.select().from(usersTable)
       .where(sql`lower(${usersTable.email}) = ${userEmail}`).limit(1);
-    if (!user || user.passwordHash !== hashPassword(password)) {
+    const check = await verifyPassword(password, user?.passwordHash);
+    if (!user || !check.ok) {
+      await recordLoginFailure(userEmail, ip);
       res.status(401).json({ error: "Invalid credentials" });
       return;
+    }
+    // Senha ainda no formato antigo (SHA-256 com salt fixo): regrava em scrypt agora que ela é conhecida.
+    if (check.needsRehash) {
+      await db.update(usersTable).set({ passwordHash: await hashPassword(password) }).where(eq(usersTable.id, user.id));
     }
     setAuthCookie(res, { id: user.id, role: user.role, name: user.name });
     res.json({

@@ -35,8 +35,13 @@ export default function Login() {
           setLocation("/");
         }
       },
-      onError: () => {
-        toast({ title: "Erro ao fazer login", description: "Credenciais inválidas.", variant: "destructive" });
+      onError: (err: any) => {
+        const tooMany = err?.status === 429;
+        toast({
+          title: "Erro ao fazer login",
+          description: tooMany ? "Muitas tentativas. Aguarde alguns minutos e tente de novo." : "Credenciais inválidas.",
+          variant: "destructive",
+        });
       }
     });
   };
