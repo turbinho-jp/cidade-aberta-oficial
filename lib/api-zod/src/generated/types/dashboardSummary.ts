@@ -13,8 +13,10 @@ export interface DashboardSummary {
   resolvedDemands: number;
   rejectedDemands?: number;
   totalCitizens: number;
-  avgResponseDays?: number;
-  avgResolutionDays: number;
+  /** @nullable */
+  avgResponseDays?: number | null;
+  /** @nullable */
+  avgResolutionDays: number | null;
   totalConfirmations: number;
   totalComments: number;
   resolutionRate?: number;

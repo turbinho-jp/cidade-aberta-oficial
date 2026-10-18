@@ -164,7 +164,9 @@ export default function DemandCreate() {
             variant: "destructive",
           });
         } else {
-          toast({ title: "Demanda registrada!", description: "Sua solicitação foi enviada com sucesso." });
+          toast(res.isApproved === false
+            ? { title: "Demanda enviada para análise", description: "Ela aparece para o público depois de aprovada pela moderação." }
+            : { title: "Demanda registrada!", description: "Sua solicitação foi publicada." });
         }
         setLocation(`/demandas/${res.id}`);
       },
@@ -185,6 +187,14 @@ export default function DemandCreate() {
           <p className="text-muted-foreground mt-2">
             Marque o local, escolha a categoria e, se puder, envie uma foto. É rápido.
           </p>
+          <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 px-4 py-3 text-sm space-y-1">
+            <p className="font-semibold">Antes de enviar</p>
+            <ul className="list-disc pl-5 space-y-0.5">
+              <li>Descreva o problema e o local. Não cite nomes de pessoas.</li>
+              <li>Não fotografe rostos, crianças nem placas de veículos.</li>
+              <li>Toda demanda passa por moderação e só aparece para o público depois de aprovada.</li>
+            </ul>
+          </div>
         </div>
 
         <Card className="border-border shadow-sm">

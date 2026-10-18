@@ -40,7 +40,8 @@ router.get("/users/:id/profile", optionalAuth, async (req, res) => {
         address: d.address, lat: d.lat, lng: d.lng,
         confirmationsCount: d.confirmationsCount, commentsCount: d.commentsCount,
         isConfirmedByMe: false, authorId: d.authorId, authorName: shownName,
-        publicResponse: d.publicResponse, createdAt: d.createdAt.toISOString(), updatedAt: d.updatedAt.toISOString(),
+        publicResponse: d.publicResponse, isApproved: d.isApproved,
+        createdAt: d.createdAt.toISOString(), updatedAt: d.updatedAt.toISOString(),
       })),
       createdAt: user.createdAt.toISOString(),
     });

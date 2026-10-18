@@ -41,6 +41,8 @@ export interface DemandDetail {
   authorName?: string;
   /** @nullable */
   publicResponse?: string | null;
+  /** false enquanto a demanda aguarda moderação (só autor e gestão a veem) */
+  isApproved?: boolean;
   createdAt: string;
   updatedAt?: string;
   timeline: TimelineEvent[];

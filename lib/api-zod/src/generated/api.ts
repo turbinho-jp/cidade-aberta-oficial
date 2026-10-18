@@ -129,6 +129,7 @@ export const ListDemandsResponse = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })),
@@ -213,6 +214,7 @@ export const GetDemandResponse = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional(),
   "timeline": zod.array(zod.object({
@@ -269,6 +271,7 @@ export const GetDemandResponse = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 }).optional(),
@@ -349,6 +352,7 @@ export const UpdateDemandResponse = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })
@@ -428,6 +432,7 @@ export const UpdateDemandStatusResponse = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })
@@ -588,6 +593,7 @@ export const ListServiceOrdersResponseItem = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 }).optional(),
@@ -677,6 +683,7 @@ export const GetServiceOrderResponse = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 }).optional(),
@@ -758,6 +765,7 @@ export const UpdateServiceOrderResponse = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 }).optional(),
@@ -877,6 +885,7 @@ export const GetDepartmentStatsResponse = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })).optional()
@@ -1095,6 +1104,7 @@ export const GetTopDemandsResponseItem = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })
@@ -1157,6 +1167,7 @@ export const GetUserProfileResponse = zod.object({
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
+  "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })).optional(),
