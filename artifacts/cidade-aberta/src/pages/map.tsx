@@ -8,7 +8,7 @@ import { Layout } from "@/components/layout";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, isPendingModeration } from "@/components/status-badge";
 import { DemandStatus } from "@workspace/api-client-react";
 import { CategoryIcon } from "@/components/category-icon";
 import { Search, Loader2, MapPin, AlertTriangle, Megaphone } from "lucide-react";
@@ -24,13 +24,15 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 
-const createCustomIcon = (status: string) => {
+const createCustomIcon = (status: string, pending = false) => {
   let color = "#64748b";
   if (status === "open") color = "#f59e0b";
   if (status === "under_review" || status === "approved") color = "#a855f7";
   if (status === "in_progress") color = "#06b6d4";
   if (status === "completed") color = "#22c55e";
   if (status === "rejected") color = "#ef4444";
+  // Em análise (só autor e gestão veem): cinza, para não parecer demanda já publicada.
+  if (pending) color = "#94a3b8";
 
   const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" fill="${color}" stroke="white" stroke-width="1.5">
     <path d="M12 0C5.4 0 0 5.4 0 12c0 9 12 24 12 24s12-15 12-24C24 5.4 18.6 0 12 0z"/>
@@ -151,12 +153,12 @@ export default function MapPage() {
                 <Marker
                   key={demand.id}
                   position={[demand.lat, demand.lng]}
-                  icon={createCustomIcon(demand.status)}
+                  icon={createCustomIcon(demand.status, isPendingModeration(demand))}
                 >
                   <Popup>
                     <div style={{ minWidth: 200 }} className="flex flex-col gap-2 p-1">
                       <div className="flex justify-between items-start gap-2">
-                        <StatusBadge status={demand.status} />
+                        <StatusBadge status={demand.status} pending={isPendingModeration(demand)} />
                         <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                           {formatDistanceToNow(new Date(demand.createdAt), { locale: ptBR, addSuffix: true })}
                         </span>
