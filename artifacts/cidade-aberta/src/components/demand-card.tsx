@@ -3,12 +3,13 @@ import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { MessageSquare, ThumbsUp, MapPin } from "lucide-react";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
-import { StatusBadge } from "./status-badge";
+import { StatusBadge, isPendingModeration } from "./status-badge";
 import { CategoryIcon } from "./category-icon";
 import type { Demand } from "@workspace/api-client-react";
 import { coverUrl } from "@/lib/attachments";
 
 export function DemandCard({ demand }: { demand: Demand }) {
+  const pending = isPendingModeration(demand);
   return (
     <Card className="hover-elevate transition-all flex flex-col h-full overflow-hidden border-border/50 group">
       <Link href={`/demandas/${demand.id}`} className="block flex-1">
@@ -23,7 +24,7 @@ export function DemandCard({ demand }: { demand: Demand }) {
         )}
         <CardHeader className="p-4 pb-2 space-y-2">
           <div className="flex justify-between items-start gap-2">
-            <StatusBadge status={demand.status} />
+            <StatusBadge status={demand.status} pending={pending} />
             <span className="text-xs text-muted-foreground whitespace-nowrap">
               {formatDistanceToNow(new Date(demand.createdAt), { addSuffix: true, locale: ptBR })}
             </span>
@@ -36,6 +37,11 @@ export function DemandCard({ demand }: { demand: Demand }) {
           <p className="text-sm text-muted-foreground line-clamp-3 mb-4">
             {demand.description}
           </p>
+          {pending && (
+            <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 mb-3">
+              Só você e a moderação veem esta demanda até ela ser aprovada.
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {demand.category && (
               <span className="flex items-center gap-1 bg-muted px-2 py-1 rounded-md">

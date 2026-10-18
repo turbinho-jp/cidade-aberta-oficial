@@ -899,6 +899,9 @@ components:
           type: string
         publicResponse:
           type: ["string", "null"]
+        isApproved:
+          type: boolean
+          description: false enquanto a demanda aguarda moderação (só autor e gestão a veem)
         createdAt:
           type: string
         updatedAt:
@@ -956,6 +959,9 @@ components:
           type: string
         publicResponse:
           type: ["string", "null"]
+        isApproved:
+          type: boolean
+          description: false enquanto a demanda aguarda moderação (só autor e gestão a veem)
         createdAt:
           type: string
         updatedAt:

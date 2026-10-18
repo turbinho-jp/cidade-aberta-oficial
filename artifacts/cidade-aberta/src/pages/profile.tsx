@@ -83,7 +83,7 @@ export default function Profile() {
 
         {profile.recentDemands && profile.recentDemands.length > 0 && (
           <div className="space-y-6 pt-8">
-            <h2 className="text-2xl font-bold tracking-tight border-b pb-2">Demandas Publicadas</h2>
+            <h2 className="text-2xl font-bold tracking-tight border-b pb-2">Demandas recentes</h2>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {profile.recentDemands.map(demand => (
                 <DemandCard key={demand.id} demand={demand} />

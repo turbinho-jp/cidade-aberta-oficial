@@ -13,7 +13,7 @@ import { PhotoGallery } from "@/components/photo-gallery";
 import { PhotoPicker, type PickedPhoto } from "@/components/photo-picker";
 import { coverUrl, uploadAttachment } from "@/lib/attachments";
 import { MAX_PHOTOS } from "@/lib/image-compress";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, isPendingModeration } from "@/components/status-badge";
 import { CategoryIcon } from "@/components/category-icon";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -166,8 +166,13 @@ export default function DemandDetail() {
           <div className="lg:col-span-2 space-y-8">
             
             <div className="bg-card p-6 md:p-8 rounded-2xl shadow-sm border border-border">
+              {isPendingModeration(demand) && (
+                <div role="status" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 px-4 py-3 text-sm">
+                  <strong>Em análise.</strong> Só você e a moderação veem esta demanda. Ela aparece para o público depois de aprovada.
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-3 mb-4">
-                <StatusBadge status={demand.status} className="text-sm px-3 py-1" />
+                <StatusBadge status={demand.status} pending={isPendingModeration(demand)} className="text-sm px-3 py-1" />
                 {demand.category && (
                   <span className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground bg-muted/50 px-3 py-1 rounded-full">
                     <CategoryIcon name={demand.category.icon} className="w-4 h-4" />
