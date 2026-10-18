@@ -211,6 +211,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <p className="text-sm text-muted-foreground text-center md:text-left">
             Uma plataforma de participação cidadã. Construída para a comunidade.
           </p>
+          <nav className="flex items-center gap-4 text-sm text-muted-foreground">
+            <Link href="/privacidade" className="hover:text-foreground hover:underline">Privacidade</Link>
+            <Link href="/termos" className="hover:text-foreground hover:underline">Termos de Uso</Link>
+          </nav>
         </div>
       </footer>
     </div>

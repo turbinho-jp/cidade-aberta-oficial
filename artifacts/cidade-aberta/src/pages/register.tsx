@@ -7,6 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "wouter";
 
@@ -14,6 +15,7 @@ const registerSchema = z.object({
   name: z.string().min(2, "Nome deve ter no mínimo 2 caracteres"),
   email: z.string().email("E-mail inválido"),
   password: z.string().min(8, "A senha deve ter no mínimo 8 caracteres"),
+  acceptTerms: z.boolean().refine((v) => v === true, "Para criar a conta, aceite os Termos e a Política de Privacidade"),
 });
 
 export default function Register() {
@@ -23,11 +25,13 @@ export default function Register() {
 
   const form = useForm<z.infer<typeof registerSchema>>({
     resolver: zodResolver(registerSchema),
-    defaultValues: { name: "", email: "", password: "" },
+    defaultValues: { name: "", email: "", password: "", acceptTerms: false },
   });
 
   const onSubmit = (data: z.infer<typeof registerSchema>) => {
-    registerMutation.mutate({ data }, {
+    // O aceite é só confirmação na tela: não vai para a API.
+    const { acceptTerms: _accepted, ...payload } = data;
+    registerMutation.mutate({ data: payload }, {
       onSuccess: () => {
         toast({ title: "Conta criada com sucesso!", description: "Bem-vindo ao Cidade Aberta." });
         setLocation("/");
@@ -93,6 +97,25 @@ export default function Register() {
                     <FormControl>
                       <Input placeholder="******" type="password" {...field} className="bg-background" />
                     </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="acceptTerms"
+                render={({ field }) => (
+                  <FormItem>
+                    <div className="flex items-start gap-3">
+                      <FormControl>
+                        <Checkbox id="accept-terms" className="mt-1" checked={field.value} onCheckedChange={(v) => field.onChange(v === true)} />
+                      </FormControl>
+                      <label htmlFor="accept-terms" className="text-sm leading-snug text-muted-foreground">
+                        Li e aceito os{" "}
+                        <Link href="/termos" className="text-primary underline" target="_blank">Termos de Uso</Link> e a{" "}
+                        <Link href="/privacidade" className="text-primary underline" target="_blank">Política de Privacidade</Link>.
+                      </label>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
