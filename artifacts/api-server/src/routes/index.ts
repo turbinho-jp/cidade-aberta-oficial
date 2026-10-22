@@ -31,5 +31,6 @@ router.use(publicWorksRouter);
 router.use(dashboardRouter);
 router.use(usersRouter);
 router.use(attachmentsRouter);
+router.use(geminiRouter);
 
 export default router;
