@@ -5,7 +5,10 @@
  * Cidade Aberta - Plataforma de Participação Cidadã
  * OpenAPI spec version: 0.1.0
  */
+import type { GetCitizenRankingPeriod } from './getCitizenRankingPeriod';
 
 export type GetCitizenRankingParams = {
 limit?: number;
+period?: GetCitizenRankingPeriod;
+neighborhoodId?: number;
 };

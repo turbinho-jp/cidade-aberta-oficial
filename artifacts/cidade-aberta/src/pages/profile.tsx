@@ -1,10 +1,13 @@
 import { useRoute } from "wouter";
-import { useGetUserProfile, getGetUserProfileQueryKey } from "@workspace/api-client-react";
+import { useGetUserProfile, getGetUserProfileQueryKey, useGetMyPointHistory, getGetMyPointHistoryQueryKey } from "@workspace/api-client-react";
 import { Layout } from "@/components/layout";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Trophy, Calendar, Megaphone, ThumbsUp, MessageSquare } from "lucide-react";
+import { Trophy, Calendar, Megaphone, ThumbsUp, MessageSquare, Award, Lock } from "lucide-react";
+import { useAuth } from "@/lib/auth";
+import { LevelBadge, LevelProgressBar } from "@/components/level-badge";
+import { getAchievements, REASON_LABELS } from "@/lib/gamification";
 import { DemandCard } from "@/components/demand-card";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -13,7 +16,12 @@ export default function Profile() {
   const [, params] = useRoute("/perfil/:id");
   const userId = parseInt(params?.id || "0");
 
+  const { user } = useAuth();
   const { data: profile, isLoading } = useGetUserProfile(userId, { query: { queryKey: getGetUserProfileQueryKey(userId), enabled: !!userId } });
+  // O histórico detalhado de pontos é privado: só a própria pessoa vê.
+  const isMe = !!user && user.id === userId;
+  const historyParams = { limit: 15 };
+  const { data: history } = useGetMyPointHistory(historyParams, { query: { queryKey: getGetMyPointHistoryQueryKey(historyParams), enabled: isMe } });
 
   if (isLoading) return <Layout><div className="container mx-auto p-8"><Skeleton className="h-[400px]" /></div></Layout>;
   if (!profile) return <Layout><div className="container mx-auto p-8 text-center">Perfil não encontrado</div></Layout>;
@@ -54,6 +62,13 @@ export default function Profile() {
                 </div>
               )}
             </div>
+
+            {profile.role === "citizen" && (
+              <div className="space-y-2 max-w-md mx-auto md:mx-0">
+                <LevelBadge points={profile.points} />
+                <LevelProgressBar points={profile.points} />
+              </div>
+            )}
           </div>
         </div>
 
@@ -80,6 +95,45 @@ export default function Profile() {
             </CardContent>
           </Card>
         </div>
+
+        {profile.role === "citizen" && (
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold tracking-tight border-b pb-2 flex items-center gap-2"><Award className="w-6 h-6 text-primary" /> Conquistas</h2>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {getAchievements(profile).map(a => (
+                <Card key={a.id} className={a.earned ? "border-primary/40 bg-primary/5" : "opacity-60"}>
+                  <CardContent className="pt-6 flex flex-col items-center text-center gap-1">
+                    {a.earned ? <Award className="w-6 h-6 text-primary" /> : <Lock className="w-6 h-6 text-muted-foreground" />}
+                    <span className="font-semibold text-sm">{a.name}</span>
+                    <span className="text-xs text-muted-foreground">{a.description}</span>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {isMe && history && history.length > 0 && (
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold tracking-tight border-b pb-2">Histórico de pontos</h2>
+            <Card>
+              <CardContent className="p-0 divide-y divide-border">
+                {history.map(h => (
+                  <div key={h.id} className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
+                    <div className="min-w-0">
+                      <div className="font-medium">{REASON_LABELS[h.reason] ?? h.reason}</div>
+                      {h.demandTitle && <div className="text-xs text-muted-foreground truncate">{h.demandTitle}</div>}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-bold text-primary">+{h.amount}</div>
+                      <div className="text-xs text-muted-foreground">{format(new Date(h.createdAt), "dd/MM/yyyy", { locale: ptBR })}</div>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {profile.recentDemands && profile.recentDemands.length > 0 && (
           <div className="space-y-6 pt-8">

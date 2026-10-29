@@ -3,6 +3,7 @@ import { db, demandsTable, categoriesTable, neighborhoodsTable, departmentsTable
 import { eq, and, or, sql, ilike, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireAdmin, optionalAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
+import { awardPoints, revokePoints, POINTS } from "../lib/gamification";
 import { isManager as isStaff, visibleTo, canSee } from "../lib/visibility";
 import { publicName, publicNameOrNull } from "../lib/public-name";
 import { syncNeighborhoodCounters, syncDepartmentCounters, type Tx } from "../lib/counters";
@@ -18,8 +19,6 @@ const router = Router();
 // Moderação: demanda de cidadão nasce pendente (is_approved = false) e só aparece
 // publicamente depois da aprovação. O autor e a equipe (admin/secretário) sempre a enxergam.
 
-const POINTS_PER_DEMAND = 10;
-
 /**
  * Efeitos de uma demanda se tornar pública: contadores de bairro/categoria e pontos do autor.
  * Chamar UMA vez por demanda, dentro da transação, depois de gravar `is_approved = true`
@@ -28,7 +27,7 @@ const POINTS_PER_DEMAND = 10;
 async function creditPublication(tx: Tx, d: { id: number; neighborhoodId: number; categoryId: number; authorId: number }) {
   await syncNeighborhoodCounters(tx, [d.neighborhoodId]);
   await tx.update(categoriesTable).set({ demandsCount: sql`${categoriesTable.demandsCount} + 1` }).where(eq(categoriesTable.id, d.categoryId));
-  await tx.update(usersTable).set({ points: sql`${usersTable.points} + ${POINTS_PER_DEMAND}` }).where(eq(usersTable.id, d.authorId));
+  await awardPoints(tx, { userId: d.authorId, amount: POINTS.DEMAND_PUBLISHED, reason: "demand_published", dedupeKey: `demand_published:${d.id}`, demandId: d.id });
 }
 
 function formatDemand(d: any, category?: any, neighborhood?: any, department?: any, isConfirmedByMe = false, attachments: AttachmentMeta[] = []) {
@@ -393,6 +392,17 @@ router.patch("/demands/:id/status", requireAdmin, async (req, res) => {
       if (wasCompleted !== (status === "completed")) {
         await syncNeighborhoodCounters(tx, [existing.neighborhoodId]);
         await syncDepartmentCounters(tx, [existing.departmentId]);
+      }
+      // Pontos do autor por demanda concluída. Só vale para demanda já publicada. A chave é por
+      // demanda: concluir de novo depois de reabrir não paga duas vezes (reativa a mesma linha),
+      // e reabrir uma demanda concluída desfaz os pontos.
+      if (existing.isApproved) {
+        const key = `demand_resolved:${id}`;
+        if (status === "completed" && !wasCompleted) {
+          await awardPoints(tx, { userId: existing.authorId, amount: POINTS.DEMAND_RESOLVED, reason: "demand_resolved", dedupeKey: key, demandId: id });
+        } else if (wasCompleted && status !== "completed") {
+          await revokePoints(tx, key);
+        }
       }
       return { existing, demand: updated, wasCompleted };
     });

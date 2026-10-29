@@ -12,3 +12,4 @@ export * from "./public_works";
 export * from "./activity_log";
 export * from "./attachments";
 export * from "./auth_attempts";
+export * from "./point_transactions";

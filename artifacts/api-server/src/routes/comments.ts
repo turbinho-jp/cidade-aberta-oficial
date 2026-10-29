@@ -6,10 +6,9 @@ import { canSee } from "../lib/visibility";
 import { publicName } from "../lib/public-name";
 import { parseBody, parseId, sendValidationError, text } from "../lib/validate";
 import { logActivity } from "../lib/activity";
+import { awardPoints, revokePoints, countActive, POINTS, COMMENTS_PER_DEMAND_CAP } from "../lib/gamification";
 
 const router = Router();
-
-const POINTS_PER_COMMENT = 2;
 
 router.get("/demands/:id/comments", optionalAuth, async (req, res) => {
   try {
@@ -51,7 +50,14 @@ router.post("/demands/:id/comments", requireAuth, async (req, res) => {
         demandId, content, authorId: currentUser.id, authorName: currentUser.name, isOfficial,
       }).returning();
       await tx.update(demandsTable).set({ commentsCount: sql`${demandsTable.commentsCount} + 1` }).where(eq(demandsTable.id, demandId));
-      await tx.update(usersTable).set({ commentsCount: sql`${usersTable.commentsCount} + 1`, points: sql`${usersTable.points} + ${POINTS_PER_COMMENT}` }).where(eq(usersTable.id, currentUser.id));
+      await tx.update(usersTable).set({ commentsCount: sql`${usersTable.commentsCount} + 1` }).where(eq(usersTable.id, currentUser.id));
+      // Só os primeiros comentários de cada pessoa por demanda pontuam (anti-spam), e só em demanda publicada.
+      if (demand.isApproved && (await countActive(tx, { demandId, reason: "comment_posted", userId: currentUser.id })) < COMMENTS_PER_DEMAND_CAP) {
+        await awardPoints(tx, {
+          userId: currentUser.id, amount: POINTS.COMMENT, reason: "comment_posted",
+          dedupeKey: `comment:${created.id}`, demandId,
+        });
+      }
       return created;
     });
     // O feed é público: atividade em demanda ainda não aprovada não pode vazar o título dela.
@@ -94,8 +100,8 @@ router.delete("/comments/:id", requireAuth, async (req, res) => {
         .where(eq(demandsTable.id, removed.demandId));
       await tx.update(usersTable).set({
         commentsCount: sql`GREATEST(${usersTable.commentsCount} - 1, 0)`,
-        points: sql`GREATEST(${usersTable.points} - ${POINTS_PER_COMMENT}, 0)`,
       }).where(eq(usersTable.id, removed.authorId));
+      await revokePoints(tx, `comment:${id}`);
     });
     res.status(204).send();
   } catch (err) {
