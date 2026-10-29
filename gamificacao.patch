@@ -1,0 +1,4140 @@
+From b332e05438188b2c1b35c03575ef9d18c54bd00a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 17:57:21 -0300
+Subject: [PATCH] =?UTF-8?q?feat:=20gamifica=C3=A7=C3=A3o=20(ledger=20de=20?=
+ =?UTF-8?q?pontos,=20patentes,=20ranking=20mensal/por=20bairro)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01YE3QKENDKntJEC1ojivZhG
+---
+ artifacts/api-server/package.json             |    2 +-
+ artifacts/api-server/src/lib/gamification.ts  |  101 +
+ artifacts/api-server/src/routes/comments.ts   |   14 +-
+ .../api-server/src/routes/confirmations.ts    |   23 +-
+ artifacts/api-server/src/routes/demands.ts    |   16 +-
+ artifacts/api-server/src/routes/users.ts      |  100 +-
+ artifacts/cidade-aberta/package.json          |    1 -
+ .../cidade-aberta/src/components/layout.tsx   |    2 +
+ .../src/components/level-badge.tsx            |   38 +
+ .../cidade-aberta/src/lib/gamification.ts     |   83 +
+ artifacts/cidade-aberta/src/pages/profile.tsx |   58 +-
+ artifacts/cidade-aberta/src/pages/ranking.tsx |  162 +-
+ .../src/generated/api.schemas.ts              |   36 +
+ lib/api-client-react/src/generated/api.ts     |   88 +
+ lib/api-spec/openapi.yaml                     |   50 +
+ lib/api-zod/src/generated/api.ts              |   24 +-
+ .../types/getCitizenRankingParams.ts          |    3 +
+ .../types/getCitizenRankingPeriod.ts          |   15 +
+ .../types/getMyPointHistoryParams.ts          |   11 +
+ lib/api-zod/src/generated/types/index.ts      |    4 +
+ .../src/generated/types/pointTransaction.ts   |   19 +
+ .../generated/types/pointTransactionReason.ts |   18 +
+ lib/db/drizzle/0005_pontos.sql                |   27 +
+ lib/db/drizzle/meta/0005_snapshot.json        | 1901 +++++++++++++++++
+ lib/db/drizzle/meta/_journal.json             |    7 +
+ lib/db/package.json                           |    3 +-
+ lib/db/scripts/backfill-points.mjs            |   85 +
+ lib/db/scripts/migrate.mjs                    |    1 +
+ lib/db/scripts/recount.mjs                    |    3 +-
+ lib/db/src/schema/index.ts                    |    1 +
+ lib/db/src/schema/point_transactions.ts       |   39 +
+ pnpm-lock.yaml                                |  291 +++
+ 32 files changed, 3170 insertions(+), 56 deletions(-)
+ create mode 100644 artifacts/api-server/src/lib/gamification.ts
+ create mode 100644 artifacts/cidade-aberta/src/components/level-badge.tsx
+ create mode 100644 artifacts/cidade-aberta/src/lib/gamification.ts
+ create mode 100644 lib/api-zod/src/generated/types/getCitizenRankingPeriod.ts
+ create mode 100644 lib/api-zod/src/generated/types/getMyPointHistoryParams.ts
+ create mode 100644 lib/api-zod/src/generated/types/pointTransaction.ts
+ create mode 100644 lib/api-zod/src/generated/types/pointTransactionReason.ts
+ create mode 100644 lib/db/drizzle/0005_pontos.sql
+ create mode 100644 lib/db/drizzle/meta/0005_snapshot.json
+ create mode 100644 lib/db/scripts/backfill-points.mjs
+ create mode 100644 lib/db/src/schema/point_transactions.ts
+
+diff --git a/artifacts/api-server/package.json b/artifacts/api-server/package.json
+index f2c1d88..97c8849 100644
+--- a/artifacts/api-server/package.json
++++ b/artifacts/api-server/package.json
+@@ -11,7 +11,7 @@
+     "typecheck": "tsc -p tsconfig.json --noEmit"
+   },
+   "dependencies": {
+-    "@google/genai": "^0.1.1",
++    "@google/genai": "^1.0.0",
+     "@workspace/api-zod": "workspace:*",
+     "@workspace/db": "workspace:*",
+     "cookie-parser": "^1.4.7",
+diff --git a/artifacts/api-server/src/lib/gamification.ts b/artifacts/api-server/src/lib/gamification.ts
+new file mode 100644
+index 0000000..2eb7f49
+--- /dev/null
++++ b/artifacts/api-server/src/lib/gamification.ts
+@@ -0,0 +1,101 @@
++import { and, eq, isNull, isNotNull, sql } from "drizzle-orm";
++import { pointTransactionsTable, usersTable, type PointReason } from "@workspace/db";
++import type { Tx } from "./counters";
++
++/**
++ * Pontuação da gamificação. Todos os valores ficam aqui para ajustar num lugar só.
++ *
++ * Os pontos só são concedidos por fatos que passaram por moderação ou por outra pessoa
++ * (demanda APROVADA, apoio de OUTRO cidadão, demanda CONCLUÍDA pelo órgão), nunca só por
++ * "criar algo". Isso é o que segura spam e contas de fachada.
++ */
++export const POINTS = {
++  /** Autor, quando a demanda é publicada (aprovada pela moderação). */
++  DEMAND_PUBLISHED: 10,
++  /** Quem apoia a demanda de outra pessoa. */
++  SUPPORT_GIVEN: 2,
++  /** Autor, por cada apoio de outra pessoa na sua demanda. */
++  SUPPORT_RECEIVED: 5,
++  /** Comentário (só conta para as primeiras COMMENTS_PER_DEMAND_CAP de cada pessoa por demanda). */
++  COMMENT: 2,
++  /** Autor, quando o órgão responsável conclui a demanda. */
++  DEMAND_RESOLVED: 50,
++} as const;
++
++/** Limite de apoios que rendem pontos ao autor por demanda (50 pontos no máximo). */
++export const SUPPORT_RECEIVED_CAP = 10;
++/** Comentários que rendem pontos, por pessoa e por demanda. */
++export const COMMENTS_PER_DEMAND_CAP = 3;
++
++interface Award {
++  userId: number;
++  amount: number;
++  reason: PointReason;
++  /** Identifica o fato que gera os pontos; o mesmo fato nunca pontua duas vezes. */
++  dedupeKey: string;
++  demandId?: number | null;
++}
++
++/**
++ * Concede pontos pelo fato `dedupeKey`. Devolve `true` se os pontos foram de fato somados
++ * (primeira vez, ou fato que tinha sido desfeito e voltou a valer) e `false` se já estavam
++ * valendo. Chamar dentro da transação que grava o fato.
++ */
++export async function awardPoints(tx: Tx, a: Award): Promise<boolean> {
++  const rows = await tx.insert(pointTransactionsTable)
++    .values({
++      userId: a.userId, amount: a.amount, reason: a.reason,
++      demandId: a.demandId ?? null, dedupeKey: a.dedupeKey,
++    })
++    .onConflictDoUpdate({
++      target: pointTransactionsTable.dedupeKey,
++      // Só "reativa" uma linha desfeita; se já está ativa, não faz nada (e não devolve linha).
++      set: { reversedAt: null, createdAt: sql`now()` },
++      setWhere: isNotNull(pointTransactionsTable.reversedAt),
++    })
++    .returning({ id: pointTransactionsTable.id });
++  if (rows.length === 0) return false;
++  await tx.update(usersTable)
++    .set({ points: sql`${usersTable.points} + ${a.amount}` })
++    .where(eq(usersTable.id, a.userId));
++  return true;
++}
++
++/**
++ * Desfaz os pontos do fato `dedupeKey` (apoio removido, comentário moderado, demanda reaberta).
++ * Idempotente: repetir não subtrai de novo. Devolve `true` se algo foi desfeito.
++ */
++export async function revokePoints(tx: Tx, dedupeKey: string): Promise<boolean> {
++  const rows = await tx.update(pointTransactionsTable)
++    .set({ reversedAt: new Date() })
++    .where(and(eq(pointTransactionsTable.dedupeKey, dedupeKey), isNull(pointTransactionsTable.reversedAt)))
++    .returning({ userId: pointTransactionsTable.userId, amount: pointTransactionsTable.amount });
++  for (const r of rows) {
++    await tx.update(usersTable)
++      .set({ points: sql`GREATEST(${usersTable.points} - ${r.amount}, 0)` })
++      .where(eq(usersTable.id, r.userId));
++  }
++  return rows.length > 0;
++}
++
++/** Quantas linhas ATIVAS existem com esse motivo (e filtros) para a demanda. Usado nos tetos. */
++export async function countActive(
++  tx: Tx,
++  where: { demandId: number; reason: PointReason; userId?: number },
++): Promise<number> {
++  const [row] = await tx.select({ n: sql<number>`count(*)::int` })
++    .from(pointTransactionsTable)
++    .where(and(
++      eq(pointTransactionsTable.demandId, where.demandId),
++      eq(pointTransactionsTable.reason, where.reason),
++      isNull(pointTransactionsTable.reversedAt),
++      where.userId !== undefined ? eq(pointTransactionsTable.userId, where.userId) : undefined,
++    ));
++  return row?.n ?? 0;
++}
++
++/** Início do mês corrente no fuso de Fortaleza (UTC-3, sem horário de verão), como instante UTC. */
++export function startOfCurrentMonth(now = new Date()): Date {
++  const local = new Date(now.getTime() - 3 * 3600_000);
++  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1, 3, 0, 0));
++}
+diff --git a/artifacts/api-server/src/routes/comments.ts b/artifacts/api-server/src/routes/comments.ts
+index 94efe7b..2f5ed7b 100644
+--- a/artifacts/api-server/src/routes/comments.ts
++++ b/artifacts/api-server/src/routes/comments.ts
+@@ -6,11 +6,10 @@ import { canSee } from "../lib/visibility";
+ import { publicName } from "../lib/public-name";
+ import { parseBody, parseId, sendValidationError, text } from "../lib/validate";
+ import { logActivity } from "../lib/activity";
++import { awardPoints, revokePoints, countActive, POINTS, COMMENTS_PER_DEMAND_CAP } from "../lib/gamification";
+ 
+ const router = Router();
+ 
+-const POINTS_PER_COMMENT = 2;
+-
+ router.get("/demands/:id/comments", optionalAuth, async (req, res) => {
+   try {
+     const id = parseId(req.params.id);
+@@ -51,7 +50,14 @@ router.post("/demands/:id/comments", requireAuth, async (req, res) => {
+         demandId, content, authorId: currentUser.id, authorName: currentUser.name, isOfficial,
+       }).returning();
+       await tx.update(demandsTable).set({ commentsCount: sql`${demandsTable.commentsCount} + 1` }).where(eq(demandsTable.id, demandId));
+-      await tx.update(usersTable).set({ commentsCount: sql`${usersTable.commentsCount} + 1`, points: sql`${usersTable.points} + ${POINTS_PER_COMMENT}` }).where(eq(usersTable.id, currentUser.id));
++      await tx.update(usersTable).set({ commentsCount: sql`${usersTable.commentsCount} + 1` }).where(eq(usersTable.id, currentUser.id));
++      // Só os primeiros comentários de cada pessoa por demanda pontuam (anti-spam), e só em demanda publicada.
++      if (demand.isApproved && (await countActive(tx, { demandId, reason: "comment_posted", userId: currentUser.id })) < COMMENTS_PER_DEMAND_CAP) {
++        await awardPoints(tx, {
++          userId: currentUser.id, amount: POINTS.COMMENT, reason: "comment_posted",
++          dedupeKey: `comment:${created.id}`, demandId,
++        });
++      }
+       return created;
+     });
+     // O feed é público: atividade em demanda ainda não aprovada não pode vazar o título dela.
+@@ -94,8 +100,8 @@ router.delete("/comments/:id", requireAuth, async (req, res) => {
+         .where(eq(demandsTable.id, removed.demandId));
+       await tx.update(usersTable).set({
+         commentsCount: sql`GREATEST(${usersTable.commentsCount} - 1, 0)`,
+-        points: sql`GREATEST(${usersTable.points} - ${POINTS_PER_COMMENT}, 0)`,
+       }).where(eq(usersTable.id, removed.authorId));
++      await revokePoints(tx, `comment:${id}`);
+     });
+     res.status(204).send();
+   } catch (err) {
+diff --git a/artifacts/api-server/src/routes/confirmations.ts b/artifacts/api-server/src/routes/confirmations.ts
+index 9eadf42..bf27448 100644
+--- a/artifacts/api-server/src/routes/confirmations.ts
++++ b/artifacts/api-server/src/routes/confirmations.ts
+@@ -5,11 +5,10 @@ import { requireAuth } from "../lib/auth";
+ import { parseId, sendValidationError } from "../lib/validate";
+ import { logActivity } from "../lib/activity";
+ import { canSee } from "../lib/visibility";
++import { awardPoints, revokePoints, countActive, POINTS, SUPPORT_RECEIVED_CAP } from "../lib/gamification";
+ 
+ const router = Router();
+ 
+-const POINTS_PER_CONFIRMATION = 3;
+-
+ router.post("/demands/:id/confirm", requireAuth, async (req, res) => {
+   try {
+     const demandId = parseId(req.params.id);
+@@ -36,8 +35,23 @@ router.post("/demands/:id/confirm", requireAuth, async (req, res) => {
+         .where(eq(demandsTable.id, demandId)).returning();
+       await tx.update(usersTable).set({
+         confirmationsCount: sql`${usersTable.confirmationsCount} + 1`,
+-        points: sql`${usersTable.points} + ${POINTS_PER_CONFIRMATION}`,
+       }).where(eq(usersTable.id, currentUser.id));
++      // Pontos só por apoiar a demanda de OUTRA pessoa (apoiar a própria não rende nada) e só em
++      // demanda já publicada. A chave por (demanda, apoiador) faz apoiar/desapoiar em loop render
++      // uma vez só; o autor tem teto de apoios que pontuam, para limitar contas de fachada.
++      if (demand?.isApproved && demand.authorId !== currentUser.id) {
++        await awardPoints(tx, {
++          userId: currentUser.id, amount: POINTS.SUPPORT_GIVEN, reason: "support_given",
++          dedupeKey: `support_given:${demandId}:${currentUser.id}`, demandId,
++        });
++        const receivedKey = `support_received:${demandId}:${currentUser.id}`;
++        if ((await countActive(tx, { demandId, reason: "support_received" })) < SUPPORT_RECEIVED_CAP) {
++          await awardPoints(tx, {
++            userId: demand.authorId, amount: POINTS.SUPPORT_RECEIVED, reason: "support_received",
++            dedupeKey: receivedKey, demandId,
++          });
++        }
++      }
+       return { created: true, demand };
+     });
+ 
+@@ -71,8 +85,9 @@ router.delete("/demands/:id/confirm", requireAuth, async (req, res) => {
+         .where(eq(demandsTable.id, demandId));
+       await tx.update(usersTable).set({
+         confirmationsCount: sql`GREATEST(${usersTable.confirmationsCount} - 1, 0)`,
+-        points: sql`GREATEST(${usersTable.points} - ${POINTS_PER_CONFIRMATION}, 0)`,
+       }).where(eq(usersTable.id, currentUser.id));
++      await revokePoints(tx, `support_given:${demandId}:${currentUser.id}`);
++      await revokePoints(tx, `support_received:${demandId}:${currentUser.id}`);
+     });
+     res.status(204).send();
+   } catch (err) {
+diff --git a/artifacts/api-server/src/routes/demands.ts b/artifacts/api-server/src/routes/demands.ts
+index e557feb..f7b1422 100644
+--- a/artifacts/api-server/src/routes/demands.ts
++++ b/artifacts/api-server/src/routes/demands.ts
+@@ -3,6 +3,7 @@ import { db, demandsTable, categoriesTable, neighborhoodsTable, departmentsTable
+ import { eq, and, or, sql, ilike, desc, inArray } from "drizzle-orm";
+ import { requireAuth, requireAdmin, optionalAuth } from "../lib/auth";
+ import { logActivity } from "../lib/activity";
++import { awardPoints, revokePoints, POINTS } from "../lib/gamification";
+ import { isManager as isStaff, visibleTo, canSee } from "../lib/visibility";
+ import { publicName, publicNameOrNull } from "../lib/public-name";
+ import { syncNeighborhoodCounters, syncDepartmentCounters, type Tx } from "../lib/counters";
+@@ -18,8 +19,6 @@ const router = Router();
+ // Moderação: demanda de cidadão nasce pendente (is_approved = false) e só aparece
+ // publicamente depois da aprovação. O autor e a equipe (admin/secretário) sempre a enxergam.
+ 
+-const POINTS_PER_DEMAND = 10;
+-
+ /**
+  * Efeitos de uma demanda se tornar pública: contadores de bairro/categoria e pontos do autor.
+  * Chamar UMA vez por demanda, dentro da transação, depois de gravar `is_approved = true`
+@@ -28,7 +27,7 @@ const POINTS_PER_DEMAND = 10;
+ async function creditPublication(tx: Tx, d: { id: number; neighborhoodId: number; categoryId: number; authorId: number }) {
+   await syncNeighborhoodCounters(tx, [d.neighborhoodId]);
+   await tx.update(categoriesTable).set({ demandsCount: sql`${categoriesTable.demandsCount} + 1` }).where(eq(categoriesTable.id, d.categoryId));
+-  await tx.update(usersTable).set({ points: sql`${usersTable.points} + ${POINTS_PER_DEMAND}` }).where(eq(usersTable.id, d.authorId));
++  await awardPoints(tx, { userId: d.authorId, amount: POINTS.DEMAND_PUBLISHED, reason: "demand_published", dedupeKey: `demand_published:${d.id}`, demandId: d.id });
+ }
+ 
+ function formatDemand(d: any, category?: any, neighborhood?: any, department?: any, isConfirmedByMe = false, attachments: AttachmentMeta[] = []) {
+@@ -394,6 +393,17 @@ router.patch("/demands/:id/status", requireAdmin, async (req, res) => {
+         await syncNeighborhoodCounters(tx, [existing.neighborhoodId]);
+         await syncDepartmentCounters(tx, [existing.departmentId]);
+       }
++      // Pontos do autor por demanda concluída. Só vale para demanda já publicada. A chave é por
++      // demanda: concluir de novo depois de reabrir não paga duas vezes (reativa a mesma linha),
++      // e reabrir uma demanda concluída desfaz os pontos.
++      if (existing.isApproved) {
++        const key = `demand_resolved:${id}`;
++        if (status === "completed" && !wasCompleted) {
++          await awardPoints(tx, { userId: existing.authorId, amount: POINTS.DEMAND_RESOLVED, reason: "demand_resolved", dedupeKey: key, demandId: id });
++        } else if (wasCompleted && status !== "completed") {
++          await revokePoints(tx, key);
++        }
++      }
+       return { existing, demand: updated, wasCompleted };
+     });
+     if (!result) { res.status(404).json({ error: "Not found" }); return; }
+diff --git a/artifacts/api-server/src/routes/users.ts b/artifacts/api-server/src/routes/users.ts
+index 031511b..084ea55 100644
+--- a/artifacts/api-server/src/routes/users.ts
++++ b/artifacts/api-server/src/routes/users.ts
+@@ -1,13 +1,16 @@
+ import { Router } from "express";
+-import { db, usersTable, demandsTable, categoriesTable, neighborhoodsTable } from "@workspace/db";
+-import { eq, desc, inArray, notInArray, gt, and } from "drizzle-orm";
+-import { optionalAuth } from "../lib/auth";
++import { db, usersTable, demandsTable, categoriesTable, neighborhoodsTable, pointTransactionsTable } from "@workspace/db";
++import { eq, desc, inArray, notInArray, gt, gte, and, isNull, sql } from "drizzle-orm";
++import { optionalAuth, requireAuth } from "../lib/auth";
++import { startOfCurrentMonth } from "../lib/gamification";
+ import { visibleTo } from "../lib/visibility";
+ import { publicName } from "../lib/public-name";
+-import { parseId, parseQuery, sendValidationError, paginationFields } from "../lib/validate";
++import { parseId, parseQuery, sendValidationError, paginationFields, optional, int, oneOf } from "../lib/validate";
+ 
+ const router = Router();
+ 
++const STAFF_ROLES = ["admin", "secretary", "moderator"] as const;
++
+ router.get("/users/:id/profile", optionalAuth, async (req, res) => {
+   try {
+     const id = parseId(req.params.id);
+@@ -28,11 +31,18 @@ router.get("/users/:id/profile", optionalAuth, async (req, res) => {
+     ]);
+     const catMap = Object.fromEntries(cats.map(c => [c.id, c]));
+     const nbrMap = Object.fromEntries(nbrs.map(n => [n.id, n]));
++    // Posição no ranking geral (mesma regra de /users/ranking: só cidadãos que já pontuaram).
++    let rankPosition: number | null = null;
++    if (!(STAFF_ROLES as readonly string[]).includes(user.role) && user.points > 0) {
++      const [{ ahead }] = await db.select({ ahead: sql<number>`count(*)::int` }).from(usersTable)
++        .where(and(notInArray(usersTable.role, [...STAFF_ROLES]), gt(usersTable.points, user.points)));
++      rankPosition = ahead + 1;
++    }
+     res.json({
+       id: user.id, name: shownName, role: user.role, avatarUrl: user.avatarUrl,
+       points: user.points, demandsCount: user.demandsCount,
+       confirmationsCount: user.confirmationsCount, commentsCount: user.commentsCount,
+-      rankPosition: null,
++      rankPosition,
+       recentDemands: recentDemands.map(d => ({
+         id: d.id, title: d.title, status: d.status, priority: d.priority,
+         categoryId: d.categoryId, category: catMap[d.categoryId],
+@@ -53,16 +63,80 @@ router.get("/users/:id/profile", optionalAuth, async (req, res) => {
+ 
+ router.get("/users/ranking", async (req, res) => {
+   try {
+-    const q = parseQuery(req.query, { limit: paginationFields(100).limit });
++    const q = parseQuery(req.query, {
++      limit: paginationFields(100).limit,
++      period: optional(oneOf(["all", "month"] as const), { blankAsMissing: true }),
++      neighborhoodId: optional(int(), { blankAsMissing: true }),
++    });
+     if (!q.ok) return sendValidationError(res, q.errors);
++    const limit = q.value.limit ?? 20;
++    const { period, neighborhoodId } = q.value;
++
+     // Ranking público de cidadãos: sem contas da prefeitura e sem quem ainda não pontuou.
+-    const users = await db.select().from(usersTable)
+-      .where(and(notInArray(usersTable.role, ["admin", "secretary", "moderator"]), gt(usersTable.points, 0)))
+-      .orderBy(desc(usersTable.points)).limit(q.value.limit ?? 20);
+-    res.json(users.map((u, i) => ({
+-      userId: u.id, name: publicName(u.name), avatarUrl: u.avatarUrl,
+-      points: u.points, demandsCount: u.demandsCount,
+-      confirmationsCount: u.confirmationsCount, rank: i + 1,
++    if (period !== "month" && neighborhoodId === undefined) {
++      const users = await db.select().from(usersTable)
++        .where(and(notInArray(usersTable.role, [...STAFF_ROLES]), gt(usersTable.points, 0)))
++        .orderBy(desc(usersTable.points)).limit(limit);
++      res.json(users.map((u, i) => ({
++        userId: u.id, name: publicName(u.name), avatarUrl: u.avatarUrl,
++        points: u.points, demandsCount: u.demandsCount,
++        confirmationsCount: u.confirmationsCount, rank: i + 1,
++      })));
++      return;
++    }
++
++    // Mensal e/ou por bairro: soma do histórico de pontos (só linhas ativas). O bairro é o da
++    // demanda que gerou os pontos. `points` na resposta passa a ser o total DO PERÍODO/BAIRRO.
++    const total = sql<number>`sum(${pointTransactionsTable.amount})::int`;
++    const rows = await db.select({ userId: pointTransactionsTable.userId, points: total })
++      .from(pointTransactionsTable)
++      .innerJoin(usersTable, eq(usersTable.id, pointTransactionsTable.userId))
++      .leftJoin(demandsTable, eq(demandsTable.id, pointTransactionsTable.demandId))
++      .where(and(
++        isNull(pointTransactionsTable.reversedAt),
++        notInArray(usersTable.role, [...STAFF_ROLES]),
++        period === "month" ? gte(pointTransactionsTable.createdAt, startOfCurrentMonth()) : undefined,
++        neighborhoodId !== undefined ? eq(demandsTable.neighborhoodId, neighborhoodId) : undefined,
++      ))
++      .groupBy(pointTransactionsTable.userId)
++      .having(sql`sum(${pointTransactionsTable.amount}) > 0`)
++      .orderBy(desc(total), pointTransactionsTable.userId)
++      .limit(limit);
++    const ids = rows.map(r => r.userId);
++    const users = ids.length ? await db.select().from(usersTable).where(inArray(usersTable.id, ids)) : [];
++    const byId = new Map(users.map(u => [u.id, u]));
++    res.json(rows.flatMap((r, i) => {
++      const u = byId.get(r.userId);
++      return u ? [{
++        userId: u.id, name: publicName(u.name), avatarUrl: u.avatarUrl,
++        points: r.points, demandsCount: u.demandsCount,
++        confirmationsCount: u.confirmationsCount, rank: i + 1,
++      }] : [];
++    }));
++  } catch (err) {
++    req.log.error(err);
++    res.status(500).json({ error: "Internal server error" });
++  }
++});
++
++// Histórico de pontos da própria pessoa ("por que ganhei isso?"). Só linhas ativas.
++router.get("/users/me/points", requireAuth, async (req, res) => {
++  try {
++    const q = parseQuery(req.query, { limit: paginationFields(100).limit });
++    if (!q.ok) return sendValidationError(res, q.errors);
++    const currentUser = (req as any).currentUser as { id: number };
++    const rows = await db.select({
++      id: pointTransactionsTable.id, amount: pointTransactionsTable.amount,
++      reason: pointTransactionsTable.reason, demandId: pointTransactionsTable.demandId,
++      demandTitle: demandsTable.title, createdAt: pointTransactionsTable.createdAt,
++    }).from(pointTransactionsTable)
++      .leftJoin(demandsTable, eq(demandsTable.id, pointTransactionsTable.demandId))
++      .where(and(eq(pointTransactionsTable.userId, currentUser.id), isNull(pointTransactionsTable.reversedAt)))
++      .orderBy(desc(pointTransactionsTable.createdAt), desc(pointTransactionsTable.id))
++      .limit(q.value.limit ?? 20);
++    res.json(rows.map(r => ({
++      id: r.id, amount: r.amount, reason: r.reason, demandId: r.demandId,
++      demandTitle: r.demandTitle, createdAt: r.createdAt.toISOString(),
+     })));
+   } catch (err) {
+     req.log.error(err);
+diff --git a/artifacts/cidade-aberta/package.json b/artifacts/cidade-aberta/package.json
+index 06102bc..6b66058 100644
+--- a/artifacts/cidade-aberta/package.json
++++ b/artifacts/cidade-aberta/package.json
+@@ -75,7 +75,6 @@
+     "zod": "catalog:"
+   },
+   "dependencies": {
+-    "@google/genai": "^0.1.1",
+     "@types/leaflet": "^1.9.21",
+     "leaflet": "^1.9.4",
+     "react-leaflet": "^5.0.0"
+diff --git a/artifacts/cidade-aberta/src/components/layout.tsx b/artifacts/cidade-aberta/src/components/layout.tsx
+index 3a72e2a..f990a76 100644
+--- a/artifacts/cidade-aberta/src/components/layout.tsx
++++ b/artifacts/cidade-aberta/src/components/layout.tsx
+@@ -9,6 +9,7 @@ import {
+   Settings, LogIn, UserPlus, ShieldCheck
+ } from "lucide-react";
+ import { cn } from "@/lib/utils";
++import { LevelBadge } from "@/components/level-badge";
+ 
+ export function Layout({ children }: { children: React.ReactNode }) {
+   const { user, isAuthenticated, isAdmin, isSecretary } = useAuth();
+@@ -90,6 +91,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
+                   <Button variant="ghost" size="sm" className="gap-2">
+                     <UserCircle className="w-5 h-5" />
+                     <span className="max-w-[100px] truncate">{user?.name}</span>
++                    {user?.role === "citizen" && <LevelBadge points={user.points} compact />}
+                   </Button>
+                 </Link>
+                 <Button variant="ghost" size="icon" onClick={handleLogout} title="Sair">
+diff --git a/artifacts/cidade-aberta/src/components/level-badge.tsx b/artifacts/cidade-aberta/src/components/level-badge.tsx
+new file mode 100644
+index 0000000..fb0148e
+--- /dev/null
++++ b/artifacts/cidade-aberta/src/components/level-badge.tsx
+@@ -0,0 +1,38 @@
++import { Progress } from "@/components/ui/progress";
++import { cn } from "@/lib/utils";
++import { getLevelProgress } from "@/lib/gamification";
++
++/** Selo com ícone e nome da patente. `compact` mostra só o ícone (com o nome no tooltip). */
++export function LevelBadge({ points, compact = false, className }: { points: number; compact?: boolean; className?: string }) {
++  const { level } = getLevelProgress(points);
++  const Icon = level.icon;
++  return (
++    <span
++      title={level.name}
++      className={cn(
++        "inline-flex items-center gap-1 rounded-full border font-semibold whitespace-nowrap",
++        compact ? "p-1" : "px-2.5 py-0.5 text-xs",
++        level.color,
++        className,
++      )}
++    >
++      <Icon className="w-3.5 h-3.5" aria-hidden />
++      {compact ? <span className="sr-only">{level.name}</span> : level.name}
++    </span>
++  );
++}
++
++/** Barra de progresso até a próxima patente. */
++export function LevelProgressBar({ points, className }: { points: number; className?: string }) {
++  const { level, next, percent, pointsToNext } = getLevelProgress(points);
++  return (
++    <div className={cn("space-y-1.5", className)}>
++      <Progress value={percent} className="h-2" aria-label={`Progresso até ${next?.name ?? level.name}`} />
++      <p className="text-xs text-muted-foreground">
++        {next
++          ? <>Faltam <strong className="text-foreground">{pointsToNext}</strong> pts para <strong className="text-foreground">{next.name}</strong></>
++          : "Você chegou à patente máxima."}
++      </p>
++    </div>
++  );
++}
+diff --git a/artifacts/cidade-aberta/src/lib/gamification.ts b/artifacts/cidade-aberta/src/lib/gamification.ts
+new file mode 100644
+index 0000000..ed1ecd1
+--- /dev/null
++++ b/artifacts/cidade-aberta/src/lib/gamification.ts
+@@ -0,0 +1,83 @@
++import { Sprout, Eye, ShieldCheck, Landmark, Crown, type LucideIcon } from "lucide-react";
++
++/**
++ * Patentes da gamificação. São derivadas dos pontos (não ficam gravadas no banco), então
++ * ajustar os limites aqui vale para todo mundo na hora, sem migração.
++ * Os valores de pontos de cada ação ficam no servidor: artifacts/api-server/src/lib/gamification.ts.
++ */
++export interface Level {
++  id: number;
++  name: string;
++  /** Pontos mínimos para chegar a esta patente. */
++  min: number;
++  icon: LucideIcon;
++  /** Classes de cor (texto + fundo + borda) para o selo. */
++  color: string;
++}
++
++export const LEVELS: Level[] = [
++  { id: 1, name: "Cidadão Atento", min: 0, icon: Sprout, color: "text-emerald-700 bg-emerald-50 border-emerald-200" },
++  { id: 2, name: "Monitor do Bairro", min: 101, icon: Eye, color: "text-sky-700 bg-sky-50 border-sky-200" },
++  { id: 3, name: "Guardião da Comunidade", min: 501, icon: ShieldCheck, color: "text-violet-700 bg-violet-50 border-violet-200" },
++  { id: 4, name: "Vereador Comunitário", min: 1501, icon: Landmark, color: "text-orange-700 bg-orange-50 border-orange-200" },
++  { id: 5, name: "Prefeito Comunitário", min: 3001, icon: Crown, color: "text-amber-700 bg-amber-50 border-amber-300" },
++];
++
++export interface LevelProgress {
++  level: Level;
++  next: Level | null;
++  /** 0 a 100. No último nível, sempre 100. */
++  percent: number;
++  pointsToNext: number;
++}
++
++export function getLevelProgress(points: number): LevelProgress {
++  const safe = Math.max(0, Math.floor(points));
++  let idx = 0;
++  for (let i = 0; i < LEVELS.length; i++) if (safe >= LEVELS[i]!.min) idx = i;
++  const level = LEVELS[idx]!;
++  const next = LEVELS[idx + 1] ?? null;
++  if (!next) return { level, next: null, percent: 100, pointsToNext: 0 };
++  const span = next.min - level.min;
++  return {
++    level,
++    next,
++    percent: Math.min(100, Math.round(((safe - level.min) / span) * 100)),
++    pointsToNext: next.min - safe,
++  };
++}
++
++/** Texto do motivo de cada lançamento no histórico de pontos. */
++export const REASON_LABELS: Record<string, string> = {
++  demand_published: "Demanda publicada",
++  support_given: "Você apoiou uma demanda",
++  support_received: "Apoio na sua demanda",
++  comment_posted: "Comentário",
++  demand_resolved: "Demanda resolvida",
++};
++
++/** Como ganhar pontos (espelha as regras do servidor). */
++export const HOW_TO_EARN: { label: string; points: number; note?: string }[] = [
++  { label: "Demanda publicada pela moderação", points: 10 },
++  { label: "Apoiar a demanda de outra pessoa", points: 2 },
++  { label: "Alguém apoiar a sua demanda", points: 5, note: "até 10 apoios por demanda" },
++  { label: "Comentar numa demanda", points: 2, note: "até 3 comentários por demanda" },
++  { label: "Sua demanda ser resolvida pelo órgão", points: 50 },
++];
++
++export interface Achievement {
++  id: string;
++  name: string;
++  description: string;
++  earned: boolean;
++}
++
++/** Conquistas calculadas a partir dos contadores do perfil (não são gravadas). */
++export function getAchievements(c: { demandsCount: number; confirmationsCount: number; commentsCount: number }): Achievement[] {
++  return [
++    { id: "first-demand", name: "Primeiro Passo", description: "Enviou a primeira demanda", earned: c.demandsCount >= 1 },
++    { id: "mapper", name: "Mapeador", description: "Enviou 5 demandas", earned: c.demandsCount >= 5 },
++    { id: "supporter", name: "Apoiador", description: "Apoiou 10 demandas", earned: c.confirmationsCount >= 10 },
++    { id: "voice", name: "Voz Ativa", description: "Fez 10 comentários", earned: c.commentsCount >= 10 },
++  ];
++}
+diff --git a/artifacts/cidade-aberta/src/pages/profile.tsx b/artifacts/cidade-aberta/src/pages/profile.tsx
+index 22466dc..0e03077 100644
+--- a/artifacts/cidade-aberta/src/pages/profile.tsx
++++ b/artifacts/cidade-aberta/src/pages/profile.tsx
+@@ -1,10 +1,13 @@
+ import { useRoute } from "wouter";
+-import { useGetUserProfile, getGetUserProfileQueryKey } from "@workspace/api-client-react";
++import { useGetUserProfile, getGetUserProfileQueryKey, useGetMyPointHistory, getGetMyPointHistoryQueryKey } from "@workspace/api-client-react";
+ import { Layout } from "@/components/layout";
+ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+ import { Card, CardContent } from "@/components/ui/card";
+ import { Skeleton } from "@/components/ui/skeleton";
+-import { Trophy, Calendar, Megaphone, ThumbsUp, MessageSquare } from "lucide-react";
++import { Trophy, Calendar, Megaphone, ThumbsUp, MessageSquare, Award, Lock } from "lucide-react";
++import { useAuth } from "@/lib/auth";
++import { LevelBadge, LevelProgressBar } from "@/components/level-badge";
++import { getAchievements, REASON_LABELS } from "@/lib/gamification";
+ import { DemandCard } from "@/components/demand-card";
+ import { format } from "date-fns";
+ import { ptBR } from "date-fns/locale";
+@@ -13,7 +16,12 @@ export default function Profile() {
+   const [, params] = useRoute("/perfil/:id");
+   const userId = parseInt(params?.id || "0");
+ 
++  const { user } = useAuth();
+   const { data: profile, isLoading } = useGetUserProfile(userId, { query: { queryKey: getGetUserProfileQueryKey(userId), enabled: !!userId } });
++  // O histórico detalhado de pontos é privado: só a própria pessoa vê.
++  const isMe = !!user && user.id === userId;
++  const historyParams = { limit: 15 };
++  const { data: history } = useGetMyPointHistory(historyParams, { query: { queryKey: getGetMyPointHistoryQueryKey(historyParams), enabled: isMe } });
+ 
+   if (isLoading) return <Layout><div className="container mx-auto p-8"><Skeleton className="h-[400px]" /></div></Layout>;
+   if (!profile) return <Layout><div className="container mx-auto p-8 text-center">Perfil não encontrado</div></Layout>;
+@@ -54,6 +62,13 @@ export default function Profile() {
+                 </div>
+               )}
+             </div>
++
++            {profile.role === "citizen" && (
++              <div className="space-y-2 max-w-md mx-auto md:mx-0">
++                <LevelBadge points={profile.points} />
++                <LevelProgressBar points={profile.points} />
++              </div>
++            )}
+           </div>
+         </div>
+ 
+@@ -81,6 +96,45 @@ export default function Profile() {
+           </Card>
+         </div>
+ 
++        {profile.role === "citizen" && (
++          <div className="space-y-4">
++            <h2 className="text-2xl font-bold tracking-tight border-b pb-2 flex items-center gap-2"><Award className="w-6 h-6 text-primary" /> Conquistas</h2>
++            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
++              {getAchievements(profile).map(a => (
++                <Card key={a.id} className={a.earned ? "border-primary/40 bg-primary/5" : "opacity-60"}>
++                  <CardContent className="pt-6 flex flex-col items-center text-center gap-1">
++                    {a.earned ? <Award className="w-6 h-6 text-primary" /> : <Lock className="w-6 h-6 text-muted-foreground" />}
++                    <span className="font-semibold text-sm">{a.name}</span>
++                    <span className="text-xs text-muted-foreground">{a.description}</span>
++                  </CardContent>
++                </Card>
++              ))}
++            </div>
++          </div>
++        )}
++
++        {isMe && history && history.length > 0 && (
++          <div className="space-y-4">
++            <h2 className="text-2xl font-bold tracking-tight border-b pb-2">Histórico de pontos</h2>
++            <Card>
++              <CardContent className="p-0 divide-y divide-border">
++                {history.map(h => (
++                  <div key={h.id} className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
++                    <div className="min-w-0">
++                      <div className="font-medium">{REASON_LABELS[h.reason] ?? h.reason}</div>
++                      {h.demandTitle && <div className="text-xs text-muted-foreground truncate">{h.demandTitle}</div>}
++                    </div>
++                    <div className="text-right shrink-0">
++                      <div className="font-bold text-primary">+{h.amount}</div>
++                      <div className="text-xs text-muted-foreground">{format(new Date(h.createdAt), "dd/MM/yyyy", { locale: ptBR })}</div>
++                    </div>
++                  </div>
++                ))}
++              </CardContent>
++            </Card>
++          </div>
++        )}
++
+         {profile.recentDemands && profile.recentDemands.length > 0 && (
+           <div className="space-y-6 pt-8">
+             <h2 className="text-2xl font-bold tracking-tight border-b pb-2">Demandas recentes</h2>
+diff --git a/artifacts/cidade-aberta/src/pages/ranking.tsx b/artifacts/cidade-aberta/src/pages/ranking.tsx
+index 8cedbc8..ed1efef 100644
+--- a/artifacts/cidade-aberta/src/pages/ranking.tsx
++++ b/artifacts/cidade-aberta/src/pages/ranking.tsx
+@@ -1,31 +1,92 @@
+-import { useGetCitizenRanking } from "@workspace/api-client-react";
++import { useState } from "react";
++import { useGetCitizenRanking, useListNeighborhoods } from "@workspace/api-client-react";
+ import { Layout } from "@/components/layout";
+ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+ import { Skeleton } from "@/components/ui/skeleton";
+-import { Trophy, Medal, Star } from "lucide-react";
++import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
++import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
++import { Trophy, Medal, Star, Crown } from "lucide-react";
+ import { Link } from "wouter";
++import { useAuth } from "@/lib/auth";
++import { LevelBadge, LevelProgressBar } from "@/components/level-badge";
++import { getLevelProgress, HOW_TO_EARN, LEVELS } from "@/lib/gamification";
++
++type Period = "month" | "all";
+ 
+ export default function Ranking() {
+-  const { data: ranking, isLoading } = useGetCitizenRanking({ limit: 50 });
++  const [period, setPeriod] = useState<Period>("month");
++  const [neighborhoodId, setNeighborhoodId] = useState("all");
++  const { user, isAuthenticated } = useAuth();
++  const { data: neighborhoods } = useListNeighborhoods();
++  const { data: ranking, isLoading } = useGetCitizenRanking({
++    limit: 50,
++    period: period === "month" ? "month" : undefined,
++    neighborhoodId: neighborhoodId !== "all" ? parseInt(neighborhoodId) : undefined,
++  });
++
++  const neighborhoodName = neighborhoods?.find(n => String(n.id) === neighborhoodId)?.name;
++  const mayorTitle = neighborhoodName ? `Prefeito do ${neighborhoodName}` : "Prefeito da Cidade";
++  const isCitizen = user && user.role === "citizen";
++  const myLevel = isCitizen ? getLevelProgress(user.points) : null;
+ 
+   return (
+     <Layout>
+       <div className="container mx-auto px-4 py-8 max-w-4xl space-y-8">
+-        <div className="text-center space-y-4 mb-12">
++        <div className="text-center space-y-4 mb-8">
+           <div className="w-16 h-16 bg-primary/10 text-primary rounded-full flex items-center justify-center mx-auto">
+             <Trophy className="w-8 h-8" />
+           </div>
+           <h1 className="text-4xl font-bold tracking-tight">Ranking Cidadão</h1>
+           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+-            Reconhecendo os membros mais ativos da comunidade na construção de uma cidade melhor.
++            Quem mais ajuda a cidade a funcionar. O título de Prefeito é de quem lidera o mês.
+           </p>
+         </div>
+ 
++        {isCitizen && myLevel && (
++          <Card className="border-primary/30">
++            <CardContent className="pt-6 space-y-3">
++              <div className="flex items-center justify-between gap-4 flex-wrap">
++                <div className="flex items-center gap-3">
++                  <LevelBadge points={user.points} />
++                  <span className="text-sm text-muted-foreground">Sua patente</span>
++                </div>
++                <div className="font-bold text-lg text-primary flex items-center gap-1">
++                  {user.points} <Star className="w-4 h-4 fill-primary" /> <span className="text-xs text-muted-foreground font-medium uppercase">pts</span>
++                </div>
++              </div>
++              <LevelProgressBar points={user.points} />
++            </CardContent>
++          </Card>
++        )}
++
+         <Card className="border-border shadow-sm">
+-          <CardHeader className="bg-muted/30 border-b border-border">
+-            <CardTitle>Top Cidadãos</CardTitle>
+-            <CardDescription>Pontuação baseada em demandas criadas, apoios e contribuições.</CardDescription>
++          <CardHeader className="bg-muted/30 border-b border-border space-y-4">
++            <div>
++              <CardTitle>{period === "month" ? "Top do mês" : "Top de todos os tempos"}</CardTitle>
++              <CardDescription>
++                {neighborhoodName ? `Pontos ganhos em demandas de ${neighborhoodName}.` : "Pontos por demandas publicadas, apoios, comentários e problemas resolvidos."}
++              </CardDescription>
++            </div>
++            <div className="flex flex-col sm:flex-row gap-3">
++              <Tabs value={period} onValueChange={(v) => setPeriod(v as Period)}>
++                <TabsList>
++                  <TabsTrigger value="month">Este mês</TabsTrigger>
++                  <TabsTrigger value="all">Geral</TabsTrigger>
++                </TabsList>
++              </Tabs>
++              <Select value={neighborhoodId} onValueChange={setNeighborhoodId}>
++                <SelectTrigger className="w-full sm:w-[220px] bg-background" aria-label="Filtrar por bairro">
++                  <SelectValue placeholder="Toda a cidade" />
++                </SelectTrigger>
++                <SelectContent>
++                  <SelectItem value="all">Toda a cidade</SelectItem>
++                  {neighborhoods?.map(n => (
++                    <SelectItem key={n.id} value={String(n.id)}>{n.name}</SelectItem>
++                  ))}
++                </SelectContent>
++              </Select>
++            </div>
+           </CardHeader>
+           <CardContent className="p-0">
+             {isLoading ? (
+@@ -36,32 +97,41 @@ export default function Ranking() {
+               </div>
+             ) : ranking?.length ? (
+               <div className="divide-y divide-border">
+-                {ranking.map((user, idx) => (
+-                  <Link key={user.userId} href={`/perfil/${user.userId}`} className="flex items-center p-4 sm:p-6 hover:bg-muted/50 transition-colors group">
++                {ranking.map((item, idx) => (
++                  <Link key={item.userId} href={`/perfil/${item.userId}`} className="flex items-center p-4 sm:p-6 hover:bg-muted/50 transition-colors group">
+                     <div className="w-12 text-center font-bold text-lg">
+-                      {idx === 0 ? <Medal className="w-8 h-8 text-amber-500 mx-auto" /> : 
+-                       idx === 1 ? <Medal className="w-8 h-8 text-slate-400 mx-auto" /> : 
+-                       idx === 2 ? <Medal className="w-8 h-8 text-orange-600 mx-auto" /> : 
++                      {idx === 0 ? <Medal className="w-8 h-8 text-amber-500 mx-auto" /> :
++                       idx === 1 ? <Medal className="w-8 h-8 text-slate-400 mx-auto" /> :
++                       idx === 2 ? <Medal className="w-8 h-8 text-orange-600 mx-auto" /> :
+                        <span className="text-muted-foreground group-hover:text-foreground transition-colors">#{idx + 1}</span>}
+                     </div>
+-                    
++
+                     <Avatar className="w-12 h-12 border-2 border-background shadow-sm ml-4 mr-4">
+-                      <AvatarImage src={user.avatarUrl || undefined} />
+-                      <AvatarFallback>{user.name.substring(0,2).toUpperCase()}</AvatarFallback>
++                      <AvatarImage src={item.avatarUrl || undefined} />
++                      <AvatarFallback>{item.name.substring(0, 2).toUpperCase()}</AvatarFallback>
+                     </Avatar>
+-                    
+-                    <div className="flex-1">
+-                      <div className="font-semibold text-foreground text-lg group-hover:text-primary transition-colors">{user.name}</div>
+-                      <div className="flex gap-4 text-xs text-muted-foreground mt-1">
+-                        <span>{user.demandsCount} Demandas</span>
++
++                    <div className="flex-1 min-w-0">
++                      <div className="flex items-center gap-2 flex-wrap">
++                        <span className="font-semibold text-foreground text-lg group-hover:text-primary transition-colors truncate">{item.name}</span>
++                        {period === "month" && idx === 0 && (
++                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-300 rounded-full px-2 py-0.5">
++                            <Crown className="w-3 h-3" aria-hidden /> {mayorTitle}
++                          </span>
++                        )}
++                      </div>
++                      <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
++                        {/* A patente usa o total acumulado; em visão mensal/por bairro `points` é parcial. */}
++                        {period === "all" && neighborhoodId === "all" && <LevelBadge points={item.points} />}
++                        <span>{item.demandsCount} Demandas</span>
+                         <span className="hidden sm:inline">•</span>
+-                        <span>{user.confirmationsCount} Apoios</span>
++                        <span>{item.confirmationsCount} Apoios</span>
+                       </div>
+                     </div>
+-                    
++
+                     <div className="text-right ml-4">
+                       <div className="font-bold text-xl text-primary flex items-center gap-1 justify-end">
+-                        {user.points} <Star className="w-4 h-4 fill-primary" />
++                        {item.points} <Star className="w-4 h-4 fill-primary" />
+                       </div>
+                       <div className="text-xs text-muted-foreground uppercase tracking-wider font-medium mt-0.5">Pontos</div>
+                     </div>
+@@ -70,11 +140,53 @@ export default function Ranking() {
+               </div>
+             ) : (
+               <div className="p-12 text-center text-muted-foreground">
+-                Nenhum dado de ranking disponível.
++                {period === "month"
++                  ? "Ninguém pontuou neste mês ainda. Reporte ou apoie uma demanda para abrir o ranking."
++                  : "Nenhum dado de ranking disponível."}
+               </div>
+             )}
+           </CardContent>
+         </Card>
++
++        <div className="grid md:grid-cols-2 gap-6">
++          <Card>
++            <CardHeader>
++              <CardTitle className="text-lg">Como ganhar pontos</CardTitle>
++            </CardHeader>
++            <CardContent className="space-y-3">
++              {HOW_TO_EARN.map(r => (
++                <div key={r.label} className="flex items-start justify-between gap-4 text-sm">
++                  <div>
++                    <div>{r.label}</div>
++                    {r.note && <div className="text-xs text-muted-foreground">{r.note}</div>}
++                  </div>
++                  <span className="font-bold text-primary whitespace-nowrap">+{r.points}</span>
++                </div>
++              ))}
++              <p className="text-xs text-muted-foreground pt-2 border-t">
++                Pontos só contam depois que a demanda é aprovada pela moderação. Apoiar a própria demanda não pontua.
++              </p>
++            </CardContent>
++          </Card>
++          <Card>
++            <CardHeader>
++              <CardTitle className="text-lg">Patentes</CardTitle>
++            </CardHeader>
++            <CardContent className="space-y-3">
++              {LEVELS.map(l => {
++                const Icon = l.icon;
++                return (
++                  <div key={l.id} className="flex items-center justify-between gap-4 text-sm">
++                    <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${l.color}`}>
++                      <Icon className="w-3.5 h-3.5" aria-hidden /> {l.name}
++                    </span>
++                    <span className="text-muted-foreground whitespace-nowrap">{l.min === 0 ? "a partir de 0" : `${l.min}+ pts`}</span>
++                  </div>
++                );
++              })}
++            </CardContent>
++          </Card>
++        </div>
+       </div>
+     </Layout>
+   );
+diff --git a/lib/api-client-react/src/generated/api.schemas.ts b/lib/api-client-react/src/generated/api.schemas.ts
+index 6a541a3..ba97f9a 100644
+--- a/lib/api-client-react/src/generated/api.schemas.ts
++++ b/lib/api-client-react/src/generated/api.schemas.ts
+@@ -587,6 +587,28 @@ export interface UserProfile {
+   createdAt: string;
+ }
+ 
++export type PointTransactionReason = typeof PointTransactionReason[keyof typeof PointTransactionReason];
++
++
++export const PointTransactionReason = {
++  demand_published: 'demand_published',
++  support_given: 'support_given',
++  support_received: 'support_received',
++  comment_posted: 'comment_posted',
++  demand_resolved: 'demand_resolved',
++} as const;
++
++export interface PointTransaction {
++  id: number;
++  amount: number;
++  reason: PointTransactionReason;
++  /** @nullable */
++  demandId?: number | null;
++  /** @nullable */
++  demandTitle?: string | null;
++  createdAt: string;
++}
++
+ export interface CitizenRankItem {
+   userId: number;
+   name: string;
+@@ -642,5 +664,19 @@ limit?: number;
+ 
+ export type GetCitizenRankingParams = {
+ limit?: number;
++period?: GetCitizenRankingPeriod;
++neighborhoodId?: number;
++};
++
++export type GetCitizenRankingPeriod = typeof GetCitizenRankingPeriod[keyof typeof GetCitizenRankingPeriod];
++
++
++export const GetCitizenRankingPeriod = {
++  all: 'all',
++  month: 'month',
++} as const;
++
++export type GetMyPointHistoryParams = {
++limit?: number;
+ };
+ 
+diff --git a/lib/api-client-react/src/generated/api.ts b/lib/api-client-react/src/generated/api.ts
+index 6121281..de8fb05 100644
+--- a/lib/api-client-react/src/generated/api.ts
++++ b/lib/api-client-react/src/generated/api.ts
+@@ -38,6 +38,7 @@ import type {
+   Department,
+   DepartmentStats,
+   GetCitizenRankingParams,
++  GetMyPointHistoryParams,
+   GetRecentActivityParams,
+   HealthStatus,
+   ListDemandsParams,
+@@ -46,6 +47,7 @@ import type {
+   LoginInput,
+   Neighborhood,
+   NeighborhoodStats,
++  PointTransaction,
+   PublicWork,
+   PublicWorkInput,
+   RegisterInput,
+@@ -2868,6 +2870,8 @@ export const getGetCitizenRankingUrl = (params?: GetCitizenRankingParams,) => {
+ }
+ 
+ /**
++ * Sem filtros devolve o ranking geral (total acumulado). Com `period=month` e/ou `neighborhoodId`, `points` é o total daquele período/bairro.
++
+  * @summary Get citizen participation ranking
+  */
+ export const getCitizenRanking = async (params?: GetCitizenRankingParams, options?: RequestInit): Promise<CitizenRankItem[]> => {
+@@ -2936,3 +2940,87 @@ export function useGetCitizenRanking<TData = Awaited<ReturnType<typeof getCitize
+ 
+ 
+ 
++export const getGetMyPointHistoryUrl = (params?: GetMyPointHistoryParams,) => {
++  const normalizedParams = new URLSearchParams();
++
++  Object.entries(params || {}).forEach(([key, value]) => {
++
++    if (value !== undefined) {
++      normalizedParams.append(key, value === null ? 'null' : value.toString())
++    }
++  });
++
++  const stringifiedParams = normalizedParams.toString();
++
++  return stringifiedParams.length > 0 ? `/api/users/me/points?${stringifiedParams}` : `/api/users/me/points`
++}
++
++/**
++ * @summary Histórico de pontos da pessoa autenticada
++ */
++export const getMyPointHistory = async (params?: GetMyPointHistoryParams, options?: RequestInit): Promise<PointTransaction[]> => {
++
++  return customFetch<PointTransaction[]>(getGetMyPointHistoryUrl(params),
++  {
++    ...options,
++    method: 'GET'
++
++
++  }
++);}
++
++
++
++
++
++export const getGetMyPointHistoryQueryKey = (params?: GetMyPointHistoryParams,) => {
++    return [
++    `/api/users/me/points`, ...(params ? [params] : [])
++    ] as const;
++    }
++
++
++export const getGetMyPointHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getMyPointHistory>>, TError = ErrorType<unknown>>(params?: GetMyPointHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMyPointHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
++) => {
++
++const {query: queryOptions, request: requestOptions} = options ?? {};
++
++  const queryKey =  queryOptions?.queryKey ?? getGetMyPointHistoryQueryKey(params);
++
++
++
++    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMyPointHistory>>> = ({ signal }) => getMyPointHistory(params, { signal, ...requestOptions });
++
++
++
++
++
++   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMyPointHistory>>, TError, TData> & { queryKey: QueryKey }
++}
++
++export type GetMyPointHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getMyPointHistory>>>
++export type GetMyPointHistoryQueryError = ErrorType<unknown>
++
++
++/**
++ * @summary Histórico de pontos da pessoa autenticada
++ */
++
++export function useGetMyPointHistory<TData = Awaited<ReturnType<typeof getMyPointHistory>>, TError = ErrorType<unknown>>(
++ params?: GetMyPointHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMyPointHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
++
++ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
++
++  const queryOptions = getGetMyPointHistoryQueryOptions(params,options)
++
++  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
++
++  return { ...query, queryKey: queryOptions.queryKey };
++}
++
++
++
++
++
++
++
+diff --git a/lib/api-spec/openapi.yaml b/lib/api-spec/openapi.yaml
+index 34928ad..910766e 100644
+--- a/lib/api-spec/openapi.yaml
++++ b/lib/api-spec/openapi.yaml
+@@ -764,11 +764,23 @@ paths:
+       operationId: getCitizenRanking
+       tags: [users]
+       summary: Get citizen participation ranking
++      description: >
++        Sem filtros devolve o ranking geral (total acumulado). Com `period=month` e/ou
++        `neighborhoodId`, `points` é o total daquele período/bairro.
+       parameters:
+         - name: limit
+           in: query
+           schema:
+             type: integer
++        - name: period
++          in: query
++          schema:
++            type: string
++            enum: [all, month]
++        - name: neighborhoodId
++          in: query
++          schema:
++            type: integer
+       responses:
+         "200":
+           description: Ranking
+@@ -779,6 +791,26 @@ paths:
+                 items:
+                   $ref: "#/components/schemas/CitizenRankItem"
+ 
++  /users/me/points:
++    get:
++      operationId: getMyPointHistory
++      tags: [users]
++      summary: Histórico de pontos da pessoa autenticada
++      parameters:
++        - name: limit
++          in: query
++          schema:
++            type: integer
++      responses:
++        "200":
++          description: Pontos ganhos, do mais recente para o mais antigo
++          content:
++            application/json:
++              schema:
++                type: array
++                items:
++                  $ref: "#/components/schemas/PointTransaction"
++
+ components:
+   schemas:
+     HealthStatus:
+@@ -1492,6 +1524,24 @@ components:
+         createdAt:
+           type: string
+ 
++    PointTransaction:
++      type: object
++      required: [id, amount, reason, createdAt]
++      properties:
++        id:
++          type: integer
++        amount:
++          type: integer
++        reason:
++          type: string
++          enum: [demand_published, support_given, support_received, comment_posted, demand_resolved]
++        demandId:
++          type: ["integer", "null"]
++        demandTitle:
++          type: ["string", "null"]
++        createdAt:
++          type: string
++
+     CitizenRankItem:
+       type: object
+       required: [userId, name, points, demandsCount, confirmationsCount]
+diff --git a/lib/api-zod/src/generated/api.ts b/lib/api-zod/src/generated/api.ts
+index 891c77d..b8e3586 100644
+--- a/lib/api-zod/src/generated/api.ts
++++ b/lib/api-zod/src/generated/api.ts
+@@ -1176,10 +1176,14 @@ export const GetUserProfileResponse = zod.object({
+ 
+ 
+ /**
++ * Sem filtros devolve o ranking geral (total acumulado). Com `period=month` e/ou `neighborhoodId`, `points` é o total daquele período/bairro.
++
+  * @summary Get citizen participation ranking
+  */
+ export const GetCitizenRankingQueryParams = zod.object({
+-  "limit": zod.coerce.number().optional()
++  "limit": zod.coerce.number().optional(),
++  "period": zod.enum(['all', 'month']).optional(),
++  "neighborhoodId": zod.coerce.number().optional()
+ })
+ 
+ export const GetCitizenRankingResponseItem = zod.object({
+@@ -1194,3 +1198,21 @@ export const GetCitizenRankingResponseItem = zod.object({
+ export const GetCitizenRankingResponse = zod.array(GetCitizenRankingResponseItem)
+ 
+ 
++/**
++ * @summary Histórico de pontos da pessoa autenticada
++ */
++export const GetMyPointHistoryQueryParams = zod.object({
++  "limit": zod.coerce.number().optional()
++})
++
++export const GetMyPointHistoryResponseItem = zod.object({
++  "id": zod.number(),
++  "amount": zod.number(),
++  "reason": zod.enum(['demand_published', 'support_given', 'support_received', 'comment_posted', 'demand_resolved']),
++  "demandId": zod.number().nullish(),
++  "demandTitle": zod.string().nullish(),
++  "createdAt": zod.string()
++})
++export const GetMyPointHistoryResponse = zod.array(GetMyPointHistoryResponseItem)
++
++
+diff --git a/lib/api-zod/src/generated/types/getCitizenRankingParams.ts b/lib/api-zod/src/generated/types/getCitizenRankingParams.ts
+index 803e7ba..3ba03e2 100644
+--- a/lib/api-zod/src/generated/types/getCitizenRankingParams.ts
++++ b/lib/api-zod/src/generated/types/getCitizenRankingParams.ts
+@@ -5,7 +5,10 @@
+  * Cidade Aberta - Plataforma de Participação Cidadã
+  * OpenAPI spec version: 0.1.0
+  */
++import type { GetCitizenRankingPeriod } from './getCitizenRankingPeriod';
+ 
+ export type GetCitizenRankingParams = {
+ limit?: number;
++period?: GetCitizenRankingPeriod;
++neighborhoodId?: number;
+ };
+diff --git a/lib/api-zod/src/generated/types/getCitizenRankingPeriod.ts b/lib/api-zod/src/generated/types/getCitizenRankingPeriod.ts
+new file mode 100644
+index 0000000..b696aa6
+--- /dev/null
++++ b/lib/api-zod/src/generated/types/getCitizenRankingPeriod.ts
+@@ -0,0 +1,15 @@
++/**
++ * Generated by orval v8.9.1 🍺
++ * Do not edit manually.
++ * Api
++ * Cidade Aberta - Plataforma de Participação Cidadã
++ * OpenAPI spec version: 0.1.0
++ */
++
++export type GetCitizenRankingPeriod = typeof GetCitizenRankingPeriod[keyof typeof GetCitizenRankingPeriod];
++
++
++export const GetCitizenRankingPeriod = {
++  all: 'all',
++  month: 'month',
++} as const;
+diff --git a/lib/api-zod/src/generated/types/getMyPointHistoryParams.ts b/lib/api-zod/src/generated/types/getMyPointHistoryParams.ts
+new file mode 100644
+index 0000000..5445870
+--- /dev/null
++++ b/lib/api-zod/src/generated/types/getMyPointHistoryParams.ts
+@@ -0,0 +1,11 @@
++/**
++ * Generated by orval v8.9.1 🍺
++ * Do not edit manually.
++ * Api
++ * Cidade Aberta - Plataforma de Participação Cidadã
++ * OpenAPI spec version: 0.1.0
++ */
++
++export type GetMyPointHistoryParams = {
++limit?: number;
++};
+diff --git a/lib/api-zod/src/generated/types/index.ts b/lib/api-zod/src/generated/types/index.ts
+index 336f74e..32f857e 100644
+--- a/lib/api-zod/src/generated/types/index.ts
++++ b/lib/api-zod/src/generated/types/index.ts
+@@ -31,6 +31,8 @@ export * from './demandUpdate';
+ export * from './department';
+ export * from './departmentStats';
+ export * from './getCitizenRankingParams';
++export * from './getCitizenRankingPeriod';
++export * from './getMyPointHistoryParams';
+ export * from './getRecentActivityParams';
+ export * from './healthStatus';
+ export * from './listDemandsParams';
+@@ -39,6 +41,8 @@ export * from './listServiceOrdersParams';
+ export * from './loginInput';
+ export * from './neighborhood';
+ export * from './neighborhoodStats';
++export * from './pointTransaction';
++export * from './pointTransactionReason';
+ export * from './publicWork';
+ export * from './publicWorkInput';
+ export * from './publicWorkInputStatus';
+diff --git a/lib/api-zod/src/generated/types/pointTransaction.ts b/lib/api-zod/src/generated/types/pointTransaction.ts
+new file mode 100644
+index 0000000..ad68689
+--- /dev/null
++++ b/lib/api-zod/src/generated/types/pointTransaction.ts
+@@ -0,0 +1,19 @@
++/**
++ * Generated by orval v8.9.1 🍺
++ * Do not edit manually.
++ * Api
++ * Cidade Aberta - Plataforma de Participação Cidadã
++ * OpenAPI spec version: 0.1.0
++ */
++import type { PointTransactionReason } from './pointTransactionReason';
++
++export interface PointTransaction {
++  id: number;
++  amount: number;
++  reason: PointTransactionReason;
++  /** @nullable */
++  demandId?: number | null;
++  /** @nullable */
++  demandTitle?: string | null;
++  createdAt: string;
++}
+diff --git a/lib/api-zod/src/generated/types/pointTransactionReason.ts b/lib/api-zod/src/generated/types/pointTransactionReason.ts
+new file mode 100644
+index 0000000..e6f7ce6
+--- /dev/null
++++ b/lib/api-zod/src/generated/types/pointTransactionReason.ts
+@@ -0,0 +1,18 @@
++/**
++ * Generated by orval v8.9.1 🍺
++ * Do not edit manually.
++ * Api
++ * Cidade Aberta - Plataforma de Participação Cidadã
++ * OpenAPI spec version: 0.1.0
++ */
++
++export type PointTransactionReason = typeof PointTransactionReason[keyof typeof PointTransactionReason];
++
++
++export const PointTransactionReason = {
++  demand_published: 'demand_published',
++  support_given: 'support_given',
++  support_received: 'support_received',
++  comment_posted: 'comment_posted',
++  demand_resolved: 'demand_resolved',
++} as const;
+diff --git a/lib/db/drizzle/0005_pontos.sql b/lib/db/drizzle/0005_pontos.sql
+new file mode 100644
+index 0000000..471e394
+--- /dev/null
++++ b/lib/db/drizzle/0005_pontos.sql
+@@ -0,0 +1,27 @@
++-- Histórico de pontos da gamificação (ver lib/db/src/schema/point_transactions.ts).
++-- IF NOT EXISTS: seguro de rodar à mão no SQL Editor do Neon e depois de novo via `migrate`.
++CREATE TABLE IF NOT EXISTS "point_transactions" (
++	"id" serial PRIMARY KEY NOT NULL,
++	"user_id" integer NOT NULL,
++	"amount" integer NOT NULL,
++	"reason" text NOT NULL,
++	"demand_id" integer,
++	"dedupe_key" text NOT NULL,
++	"reversed_at" timestamp,
++	"created_at" timestamp DEFAULT now() NOT NULL,
++	CONSTRAINT "point_transactions_dedupe_key_unique" UNIQUE("dedupe_key")
++);
++--> statement-breakpoint
++DO $$ BEGIN
++ ALTER TABLE "point_transactions" ADD CONSTRAINT "point_transactions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
++EXCEPTION WHEN duplicate_object THEN NULL; END $$;
++--> statement-breakpoint
++DO $$ BEGIN
++ ALTER TABLE "point_transactions" ADD CONSTRAINT "point_transactions_demand_id_demands_id_fk" FOREIGN KEY ("demand_id") REFERENCES "public"."demands"("id") ON DELETE set null ON UPDATE no action;
++EXCEPTION WHEN duplicate_object THEN NULL; END $$;
++--> statement-breakpoint
++CREATE INDEX IF NOT EXISTS "point_transactions_user_created_idx" ON "point_transactions" USING btree ("user_id","created_at");
++--> statement-breakpoint
++CREATE INDEX IF NOT EXISTS "point_transactions_demand_id_idx" ON "point_transactions" USING btree ("demand_id");
++--> statement-breakpoint
++CREATE INDEX IF NOT EXISTS "point_transactions_created_idx" ON "point_transactions" USING btree ("created_at");
+diff --git a/lib/db/drizzle/meta/0005_snapshot.json b/lib/db/drizzle/meta/0005_snapshot.json
+new file mode 100644
+index 0000000..98e20ff
+--- /dev/null
++++ b/lib/db/drizzle/meta/0005_snapshot.json
+@@ -0,0 +1,1901 @@
++{
++  "id": "6a078979-85e7-4834-867e-f0a060bd9d75",
++  "prevId": "bfdcac83-9680-40ff-8b93-211635081e40",
++  "version": "7",
++  "dialect": "postgresql",
++  "tables": {
++    "public.users": {
++      "name": "users",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "name": {
++          "name": "name",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "email": {
++          "name": "email",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "password_hash": {
++          "name": "password_hash",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "role": {
++          "name": "role",
++          "type": "user_role",
++          "typeSchema": "public",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "'citizen'"
++        },
++        "phone": {
++          "name": "phone",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "avatar_url": {
++          "name": "avatar_url",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "points": {
++          "name": "points",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "demands_count": {
++          "name": "demands_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "confirmations_count": {
++          "name": "confirmations_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "comments_count": {
++          "name": "comments_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        },
++        "updated_at": {
++          "name": "updated_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {},
++      "foreignKeys": {},
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {
++        "users_email_unique": {
++          "name": "users_email_unique",
++          "nullsNotDistinct": false,
++          "columns": [
++            "email"
++          ]
++        }
++      },
++      "policies": {},
++      "checkConstraints": {},
++      "isRLSEnabled": false
++    },
++    "public.categories": {
++      "name": "categories",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "name": {
++          "name": "name",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "icon": {
++          "name": "icon",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "'AlertCircle'"
++        },
++        "color": {
++          "name": "color",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "'#3B82F6'"
++        },
++        "description": {
++          "name": "description",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "demands_count": {
++          "name": "demands_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {},
++      "foreignKeys": {},
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {
++        "categories_demands_count_nonneg": {
++          "name": "categories_demands_count_nonneg",
++          "value": "\"categories\".\"demands_count\" >= 0"
++        }
++      },
++      "isRLSEnabled": false
++    },
++    "public.neighborhoods": {
++      "name": "neighborhoods",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "name": {
++          "name": "name",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "demands_count": {
++          "name": "demands_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "resolved_count": {
++          "name": "resolved_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {},
++      "foreignKeys": {},
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {
++        "neighborhoods_demands_count_nonneg": {
++          "name": "neighborhoods_demands_count_nonneg",
++          "value": "\"neighborhoods\".\"demands_count\" >= 0"
++        },
++        "neighborhoods_resolved_count_nonneg": {
++          "name": "neighborhoods_resolved_count_nonneg",
++          "value": "\"neighborhoods\".\"resolved_count\" >= 0"
++        }
++      },
++      "isRLSEnabled": false
++    },
++    "public.departments": {
++      "name": "departments",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "name": {
++          "name": "name",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "description": {
++          "name": "description",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "''"
++        },
++        "logo_url": {
++          "name": "logo_url",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "demands_count": {
++          "name": "demands_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "resolved_count": {
++          "name": "resolved_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "avg_resolution_days": {
++          "name": "avg_resolution_days",
++          "type": "real",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "efficiency_index": {
++          "name": "efficiency_index",
++          "type": "real",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {},
++      "foreignKeys": {},
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {
++        "departments_demands_count_nonneg": {
++          "name": "departments_demands_count_nonneg",
++          "value": "\"departments\".\"demands_count\" >= 0"
++        },
++        "departments_resolved_count_nonneg": {
++          "name": "departments_resolved_count_nonneg",
++          "value": "\"departments\".\"resolved_count\" >= 0"
++        }
++      },
++      "isRLSEnabled": false
++    },
++    "public.demands": {
++      "name": "demands",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "title": {
++          "name": "title",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "description": {
++          "name": "description",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "status": {
++          "name": "status",
++          "type": "demand_status",
++          "typeSchema": "public",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "'open'"
++        },
++        "priority": {
++          "name": "priority",
++          "type": "demand_priority",
++          "typeSchema": "public",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "category_id": {
++          "name": "category_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "neighborhood_id": {
++          "name": "neighborhood_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "department_id": {
++          "name": "department_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "address": {
++          "name": "address",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "lat": {
++          "name": "lat",
++          "type": "real",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "lng": {
++          "name": "lng",
++          "type": "real",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "photo_url": {
++          "name": "photo_url",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "confirmations_count": {
++          "name": "confirmations_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "comments_count": {
++          "name": "comments_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "author_id": {
++          "name": "author_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "author_name": {
++          "name": "author_name",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "public_response": {
++          "name": "public_response",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "is_approved": {
++          "name": "is_approved",
++          "type": "boolean",
++          "primaryKey": false,
++          "notNull": true,
++          "default": true
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        },
++        "updated_at": {
++          "name": "updated_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {
++        "demands_status_idx": {
++          "name": "demands_status_idx",
++          "columns": [
++            {
++              "expression": "status",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "demands_category_id_idx": {
++          "name": "demands_category_id_idx",
++          "columns": [
++            {
++              "expression": "category_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "demands_neighborhood_id_idx": {
++          "name": "demands_neighborhood_id_idx",
++          "columns": [
++            {
++              "expression": "neighborhood_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "demands_department_id_idx": {
++          "name": "demands_department_id_idx",
++          "columns": [
++            {
++              "expression": "department_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "demands_author_id_idx": {
++          "name": "demands_author_id_idx",
++          "columns": [
++            {
++              "expression": "author_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "demands_created_at_idx": {
++          "name": "demands_created_at_idx",
++          "columns": [
++            {
++              "expression": "created_at",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        }
++      },
++      "foreignKeys": {
++        "demands_category_id_categories_id_fk": {
++          "name": "demands_category_id_categories_id_fk",
++          "tableFrom": "demands",
++          "tableTo": "categories",
++          "columnsFrom": [
++            "category_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "restrict",
++          "onUpdate": "no action"
++        },
++        "demands_neighborhood_id_neighborhoods_id_fk": {
++          "name": "demands_neighborhood_id_neighborhoods_id_fk",
++          "tableFrom": "demands",
++          "tableTo": "neighborhoods",
++          "columnsFrom": [
++            "neighborhood_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "restrict",
++          "onUpdate": "no action"
++        },
++        "demands_department_id_departments_id_fk": {
++          "name": "demands_department_id_departments_id_fk",
++          "tableFrom": "demands",
++          "tableTo": "departments",
++          "columnsFrom": [
++            "department_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "set null",
++          "onUpdate": "no action"
++        },
++        "demands_author_id_users_id_fk": {
++          "name": "demands_author_id_users_id_fk",
++          "tableFrom": "demands",
++          "tableTo": "users",
++          "columnsFrom": [
++            "author_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "restrict",
++          "onUpdate": "no action"
++        }
++      },
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {
++        "demands_confirmations_count_nonneg": {
++          "name": "demands_confirmations_count_nonneg",
++          "value": "\"demands\".\"confirmations_count\" >= 0"
++        },
++        "demands_comments_count_nonneg": {
++          "name": "demands_comments_count_nonneg",
++          "value": "\"demands\".\"comments_count\" >= 0"
++        }
++      },
++      "isRLSEnabled": false
++    },
++    "public.comments": {
++      "name": "comments",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "demand_id": {
++          "name": "demand_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "content": {
++          "name": "content",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "author_id": {
++          "name": "author_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "author_name": {
++          "name": "author_name",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "author_avatar_url": {
++          "name": "author_avatar_url",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "is_moderated": {
++          "name": "is_moderated",
++          "type": "boolean",
++          "primaryKey": false,
++          "notNull": true,
++          "default": false
++        },
++        "is_official": {
++          "name": "is_official",
++          "type": "boolean",
++          "primaryKey": false,
++          "notNull": true,
++          "default": false
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {
++        "comments_demand_id_idx": {
++          "name": "comments_demand_id_idx",
++          "columns": [
++            {
++              "expression": "demand_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "comments_author_id_idx": {
++          "name": "comments_author_id_idx",
++          "columns": [
++            {
++              "expression": "author_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        }
++      },
++      "foreignKeys": {
++        "comments_demand_id_demands_id_fk": {
++          "name": "comments_demand_id_demands_id_fk",
++          "tableFrom": "comments",
++          "tableTo": "demands",
++          "columnsFrom": [
++            "demand_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "cascade",
++          "onUpdate": "no action"
++        },
++        "comments_author_id_users_id_fk": {
++          "name": "comments_author_id_users_id_fk",
++          "tableFrom": "comments",
++          "tableTo": "users",
++          "columnsFrom": [
++            "author_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "restrict",
++          "onUpdate": "no action"
++        }
++      },
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {},
++      "isRLSEnabled": false
++    },
++    "public.confirmations": {
++      "name": "confirmations",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "demand_id": {
++          "name": "demand_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "user_id": {
++          "name": "user_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {
++        "confirmations_user_id_idx": {
++          "name": "confirmations_user_id_idx",
++          "columns": [
++            {
++              "expression": "user_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        }
++      },
++      "foreignKeys": {
++        "confirmations_demand_id_demands_id_fk": {
++          "name": "confirmations_demand_id_demands_id_fk",
++          "tableFrom": "confirmations",
++          "tableTo": "demands",
++          "columnsFrom": [
++            "demand_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "cascade",
++          "onUpdate": "no action"
++        },
++        "confirmations_user_id_users_id_fk": {
++          "name": "confirmations_user_id_users_id_fk",
++          "tableFrom": "confirmations",
++          "tableTo": "users",
++          "columnsFrom": [
++            "user_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "cascade",
++          "onUpdate": "no action"
++        }
++      },
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {
++        "confirmations_demand_user_unique": {
++          "name": "confirmations_demand_user_unique",
++          "nullsNotDistinct": false,
++          "columns": [
++            "demand_id",
++            "user_id"
++          ]
++        }
++      },
++      "policies": {},
++      "checkConstraints": {},
++      "isRLSEnabled": false
++    },
++    "public.timeline_events": {
++      "name": "timeline_events",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "demand_id": {
++          "name": "demand_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "event": {
++          "name": "event",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "description": {
++          "name": "description",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "actor_name": {
++          "name": "actor_name",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "actor_role": {
++          "name": "actor_role",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "status_from": {
++          "name": "status_from",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "status_to": {
++          "name": "status_to",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "is_public": {
++          "name": "is_public",
++          "type": "boolean",
++          "primaryKey": false,
++          "notNull": true,
++          "default": true
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {
++        "timeline_events_demand_id_idx": {
++          "name": "timeline_events_demand_id_idx",
++          "columns": [
++            {
++              "expression": "demand_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        }
++      },
++      "foreignKeys": {
++        "timeline_events_demand_id_demands_id_fk": {
++          "name": "timeline_events_demand_id_demands_id_fk",
++          "tableFrom": "timeline_events",
++          "tableTo": "demands",
++          "columnsFrom": [
++            "demand_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "cascade",
++          "onUpdate": "no action"
++        }
++      },
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {},
++      "isRLSEnabled": false
++    },
++    "public.teams": {
++      "name": "teams",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "name": {
++          "name": "name",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "area": {
++          "name": "area",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "description": {
++          "name": "description",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "active_orders_count": {
++          "name": "active_orders_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "completed_orders_count": {
++          "name": "completed_orders_count",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {},
++      "foreignKeys": {},
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {
++        "teams_active_orders_count_nonneg": {
++          "name": "teams_active_orders_count_nonneg",
++          "value": "\"teams\".\"active_orders_count\" >= 0"
++        },
++        "teams_completed_orders_count_nonneg": {
++          "name": "teams_completed_orders_count_nonneg",
++          "value": "\"teams\".\"completed_orders_count\" >= 0"
++        }
++      },
++      "isRLSEnabled": false
++    },
++    "public.service_orders": {
++      "name": "service_orders",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "demand_id": {
++          "name": "demand_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "title": {
++          "name": "title",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "description": {
++          "name": "description",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "status": {
++          "name": "status",
++          "type": "service_order_status",
++          "typeSchema": "public",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "'pending'"
++        },
++        "priority": {
++          "name": "priority",
++          "type": "service_order_priority",
++          "typeSchema": "public",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "'medium'"
++        },
++        "team_id": {
++          "name": "team_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "estimated_completion": {
++          "name": "estimated_completion",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "completed_at": {
++          "name": "completed_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "sla_hours": {
++          "name": "sla_hours",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "notes": {
++          "name": "notes",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        },
++        "updated_at": {
++          "name": "updated_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {
++        "service_orders_demand_id_idx": {
++          "name": "service_orders_demand_id_idx",
++          "columns": [
++            {
++              "expression": "demand_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "service_orders_team_id_idx": {
++          "name": "service_orders_team_id_idx",
++          "columns": [
++            {
++              "expression": "team_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "service_orders_status_idx": {
++          "name": "service_orders_status_idx",
++          "columns": [
++            {
++              "expression": "status",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        }
++      },
++      "foreignKeys": {
++        "service_orders_demand_id_demands_id_fk": {
++          "name": "service_orders_demand_id_demands_id_fk",
++          "tableFrom": "service_orders",
++          "tableTo": "demands",
++          "columnsFrom": [
++            "demand_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "cascade",
++          "onUpdate": "no action"
++        },
++        "service_orders_team_id_teams_id_fk": {
++          "name": "service_orders_team_id_teams_id_fk",
++          "tableFrom": "service_orders",
++          "tableTo": "teams",
++          "columnsFrom": [
++            "team_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "set null",
++          "onUpdate": "no action"
++        }
++      },
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {},
++      "isRLSEnabled": false
++    },
++    "public.public_works": {
++      "name": "public_works",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "title": {
++          "name": "title",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "description": {
++          "name": "description",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "status": {
++          "name": "status",
++          "type": "public_work_status",
++          "typeSchema": "public",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "'planned'"
++        },
++        "neighborhood_id": {
++          "name": "neighborhood_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "department_id": {
++          "name": "department_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "investment": {
++          "name": "investment",
++          "type": "real",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "start_date": {
++          "name": "start_date",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "estimated_end": {
++          "name": "estimated_end",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "completed_at": {
++          "name": "completed_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "lat": {
++          "name": "lat",
++          "type": "real",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "lng": {
++          "name": "lng",
++          "type": "real",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "photo_url": {
++          "name": "photo_url",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "progress_percent": {
++          "name": "progress_percent",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true,
++          "default": 0
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {
++        "public_works_neighborhood_id_idx": {
++          "name": "public_works_neighborhood_id_idx",
++          "columns": [
++            {
++              "expression": "neighborhood_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "public_works_department_id_idx": {
++          "name": "public_works_department_id_idx",
++          "columns": [
++            {
++              "expression": "department_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        }
++      },
++      "foreignKeys": {
++        "public_works_neighborhood_id_neighborhoods_id_fk": {
++          "name": "public_works_neighborhood_id_neighborhoods_id_fk",
++          "tableFrom": "public_works",
++          "tableTo": "neighborhoods",
++          "columnsFrom": [
++            "neighborhood_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "restrict",
++          "onUpdate": "no action"
++        },
++        "public_works_department_id_departments_id_fk": {
++          "name": "public_works_department_id_departments_id_fk",
++          "tableFrom": "public_works",
++          "tableTo": "departments",
++          "columnsFrom": [
++            "department_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "set null",
++          "onUpdate": "no action"
++        }
++      },
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {
++        "public_works_progress_percent_range": {
++          "name": "public_works_progress_percent_range",
++          "value": "\"public_works\".\"progress_percent\" >= 0 AND \"public_works\".\"progress_percent\" <= 100"
++        }
++      },
++      "isRLSEnabled": false
++    },
++    "public.activity_log": {
++      "name": "activity_log",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "type": {
++          "name": "type",
++          "type": "activity_type",
++          "typeSchema": "public",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "description": {
++          "name": "description",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "demand_id": {
++          "name": "demand_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "demand_title": {
++          "name": "demand_title",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "actor_name": {
++          "name": "actor_name",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "neighborhood_name": {
++          "name": "neighborhood_name",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {
++        "activity_log_created_at_idx": {
++          "name": "activity_log_created_at_idx",
++          "columns": [
++            {
++              "expression": "created_at",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "activity_log_demand_id_idx": {
++          "name": "activity_log_demand_id_idx",
++          "columns": [
++            {
++              "expression": "demand_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        }
++      },
++      "foreignKeys": {
++        "activity_log_demand_id_demands_id_fk": {
++          "name": "activity_log_demand_id_demands_id_fk",
++          "tableFrom": "activity_log",
++          "tableTo": "demands",
++          "columnsFrom": [
++            "demand_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "set null",
++          "onUpdate": "no action"
++        }
++      },
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {},
++      "isRLSEnabled": false
++    },
++    "public.attachments": {
++      "name": "attachments",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "demand_id": {
++          "name": "demand_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "public_work_id": {
++          "name": "public_work_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "uploaded_by_id": {
++          "name": "uploaded_by_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "mime_type": {
++          "name": "mime_type",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "size_bytes": {
++          "name": "size_bytes",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "data": {
++          "name": "data",
++          "type": "bytea",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {
++        "attachments_demand_id_idx": {
++          "name": "attachments_demand_id_idx",
++          "columns": [
++            {
++              "expression": "demand_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "attachments_public_work_id_idx": {
++          "name": "attachments_public_work_id_idx",
++          "columns": [
++            {
++              "expression": "public_work_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "attachments_uploaded_by_created_idx": {
++          "name": "attachments_uploaded_by_created_idx",
++          "columns": [
++            {
++              "expression": "uploaded_by_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            },
++            {
++              "expression": "created_at",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        }
++      },
++      "foreignKeys": {
++        "attachments_demand_id_demands_id_fk": {
++          "name": "attachments_demand_id_demands_id_fk",
++          "tableFrom": "attachments",
++          "tableTo": "demands",
++          "columnsFrom": [
++            "demand_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "cascade",
++          "onUpdate": "no action"
++        },
++        "attachments_public_work_id_public_works_id_fk": {
++          "name": "attachments_public_work_id_public_works_id_fk",
++          "tableFrom": "attachments",
++          "tableTo": "public_works",
++          "columnsFrom": [
++            "public_work_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "cascade",
++          "onUpdate": "no action"
++        },
++        "attachments_uploaded_by_id_users_id_fk": {
++          "name": "attachments_uploaded_by_id_users_id_fk",
++          "tableFrom": "attachments",
++          "tableTo": "users",
++          "columnsFrom": [
++            "uploaded_by_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "set null",
++          "onUpdate": "no action"
++        }
++      },
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {
++        "attachments_single_owner": {
++          "name": "attachments_single_owner",
++          "value": "(\"attachments\".\"demand_id\" IS NOT NULL)::int + (\"attachments\".\"public_work_id\" IS NOT NULL)::int = 1"
++        },
++        "attachments_size_positive": {
++          "name": "attachments_size_positive",
++          "value": "\"attachments\".\"size_bytes\" > 0"
++        }
++      },
++      "isRLSEnabled": false
++    },
++    "public.auth_attempts": {
++      "name": "auth_attempts",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "key": {
++          "name": "key",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {
++        "auth_attempts_key_created_idx": {
++          "name": "auth_attempts_key_created_idx",
++          "columns": [
++            {
++              "expression": "key",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            },
++            {
++              "expression": "created_at",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        }
++      },
++      "foreignKeys": {},
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {},
++      "policies": {},
++      "checkConstraints": {},
++      "isRLSEnabled": false
++    },
++    "public.point_transactions": {
++      "name": "point_transactions",
++      "schema": "",
++      "columns": {
++        "id": {
++          "name": "id",
++          "type": "serial",
++          "primaryKey": true,
++          "notNull": true
++        },
++        "user_id": {
++          "name": "user_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "amount": {
++          "name": "amount",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "reason": {
++          "name": "reason",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "demand_id": {
++          "name": "demand_id",
++          "type": "integer",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "dedupe_key": {
++          "name": "dedupe_key",
++          "type": "text",
++          "primaryKey": false,
++          "notNull": true
++        },
++        "reversed_at": {
++          "name": "reversed_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": false
++        },
++        "created_at": {
++          "name": "created_at",
++          "type": "timestamp",
++          "primaryKey": false,
++          "notNull": true,
++          "default": "now()"
++        }
++      },
++      "indexes": {
++        "point_transactions_user_created_idx": {
++          "name": "point_transactions_user_created_idx",
++          "columns": [
++            {
++              "expression": "user_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            },
++            {
++              "expression": "created_at",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "point_transactions_demand_id_idx": {
++          "name": "point_transactions_demand_id_idx",
++          "columns": [
++            {
++              "expression": "demand_id",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        },
++        "point_transactions_created_idx": {
++          "name": "point_transactions_created_idx",
++          "columns": [
++            {
++              "expression": "created_at",
++              "isExpression": false,
++              "asc": true,
++              "nulls": "last"
++            }
++          ],
++          "isUnique": false,
++          "concurrently": false,
++          "method": "btree",
++          "with": {}
++        }
++      },
++      "foreignKeys": {
++        "point_transactions_user_id_users_id_fk": {
++          "name": "point_transactions_user_id_users_id_fk",
++          "tableFrom": "point_transactions",
++          "tableTo": "users",
++          "columnsFrom": [
++            "user_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "cascade",
++          "onUpdate": "no action"
++        },
++        "point_transactions_demand_id_demands_id_fk": {
++          "name": "point_transactions_demand_id_demands_id_fk",
++          "tableFrom": "point_transactions",
++          "tableTo": "demands",
++          "columnsFrom": [
++            "demand_id"
++          ],
++          "columnsTo": [
++            "id"
++          ],
++          "onDelete": "set null",
++          "onUpdate": "no action"
++        }
++      },
++      "compositePrimaryKeys": {},
++      "uniqueConstraints": {
++        "point_transactions_dedupe_key_unique": {
++          "name": "point_transactions_dedupe_key_unique",
++          "nullsNotDistinct": false,
++          "columns": [
++            "dedupe_key"
++          ]
++        }
++      },
++      "policies": {},
++      "checkConstraints": {},
++      "isRLSEnabled": false
++    }
++  },
++  "enums": {
++    "public.user_role": {
++      "name": "user_role",
++      "schema": "public",
++      "values": [
++        "citizen",
++        "admin",
++        "secretary",
++        "moderator"
++      ]
++    },
++    "public.demand_priority": {
++      "name": "demand_priority",
++      "schema": "public",
++      "values": [
++        "low",
++        "medium",
++        "high",
++        "urgent"
++      ]
++    },
++    "public.demand_status": {
++      "name": "demand_status",
++      "schema": "public",
++      "values": [
++        "open",
++        "under_review",
++        "approved",
++        "in_progress",
++        "completed",
++        "rejected",
++        "closed"
++      ]
++    },
++    "public.service_order_priority": {
++      "name": "service_order_priority",
++      "schema": "public",
++      "values": [
++        "low",
++        "medium",
++        "high",
++        "urgent"
++      ]
++    },
++    "public.service_order_status": {
++      "name": "service_order_status",
++      "schema": "public",
++      "values": [
++        "pending",
++        "assigned",
++        "in_progress",
++        "completed",
++        "cancelled"
++      ]
++    },
++    "public.public_work_status": {
++      "name": "public_work_status",
++      "schema": "public",
++      "values": [
++        "planned",
++        "approved",
++        "in_progress",
++        "completed",
++        "suspended"
++      ]
++    },
++    "public.activity_type": {
++      "name": "activity_type",
++      "schema": "public",
++      "values": [
++        "demand_created",
++        "demand_resolved",
++        "comment_added",
++        "status_changed",
++        "service_order_created",
++        "confirmation_added"
++      ]
++    }
++  },
++  "schemas": {},
++  "sequences": {},
++  "roles": {},
++  "policies": {},
++  "views": {},
++  "_meta": {
++    "columns": {},
++    "schemas": {},
++    "tables": {}
++  }
++}
+\ No newline at end of file
+diff --git a/lib/db/drizzle/meta/_journal.json b/lib/db/drizzle/meta/_journal.json
+index 64b548f..eb8ebb0 100644
+--- a/lib/db/drizzle/meta/_journal.json
++++ b/lib/db/drizzle/meta/_journal.json
+@@ -36,6 +36,13 @@
+       "when": 1792121311620,
+       "tag": "0004_tentativas_login",
+       "breakpoints": true
++    },
++    {
++      "idx": 5,
++      "version": "7",
++      "when": 1793306532472,
++      "tag": "0005_pontos",
++      "breakpoints": true
+     }
+   ]
+ }
+\ No newline at end of file
+diff --git a/lib/db/package.json b/lib/db/package.json
+index 4fbae16..ae57cf9 100644
+--- a/lib/db/package.json
++++ b/lib/db/package.json
+@@ -12,7 +12,8 @@
+     "check": "drizzle-kit check --config ./drizzle.config.ts",
+     "migrate": "node ./scripts/migrate.mjs",
+     "seed": "node ./scripts/seed.mjs",
+-    "recount": "node ./scripts/recount.mjs"
++    "recount": "node ./scripts/recount.mjs",
++    "backfill-points": "node ./scripts/backfill-points.mjs"
+   },
+   "dependencies": {
+     "drizzle-orm": "catalog:",
+diff --git a/lib/db/scripts/backfill-points.mjs b/lib/db/scripts/backfill-points.mjs
+new file mode 100644
+index 0000000..989531c
+--- /dev/null
++++ b/lib/db/scripts/backfill-points.mjs
+@@ -0,0 +1,85 @@
++// Reconstrói o histórico de pontos (point_transactions) a partir dos dados reais e recalcula
++// `users.points` como a soma desse histórico. Rode UMA vez depois da migração 0005.
++//
++//   pnpm --filter @workspace/db run backfill-points            # só mostra o que mudaria
++//   pnpm --filter @workspace/db run backfill-points -- --apply # grava
++//
++// Regras (as mesmas de artifacts/api-server/src/lib/gamification.ts — mantenha em sincronia):
++//   demanda publicada (aprovada)            +10 ao autor
++//   apoio em demanda de OUTRA pessoa        +2 ao apoiador, +5 ao autor (até 10 apoios por demanda)
++//   comentário (3 primeiros por pessoa/demanda, em demanda aprovada, não moderado)  +2
++//   demanda concluída (aprovada)            +50 ao autor
++// Atenção: isto SUBSTITUI o total atual de cada usuário pelo recalculado. Como as regras mudaram
++// (apoio valia 3, agora 2; novos pontos por demanda concluída etc.), alguns totais vão mudar.
++// Rode primeiro sem --apply e confira a tabela. É idempotente (ON CONFLICT DO NOTHING).
++import pg from "pg";
++
++const url = process.env.DATABASE_URL;
++if (!url) { console.error("DATABASE_URL não está definida."); process.exit(1); }
++const apply = process.argv.includes("--apply");
++
++const INSERTS = [
++  `INSERT INTO point_transactions (user_id, amount, reason, demand_id, dedupe_key, created_at)
++     SELECT d.author_id, 10, 'demand_published', d.id, 'demand_published:' || d.id, d.created_at
++     FROM demands d WHERE d.is_approved
++     ON CONFLICT (dedupe_key) DO NOTHING`,
++  `INSERT INTO point_transactions (user_id, amount, reason, demand_id, dedupe_key, created_at)
++     SELECT c.user_id, 2, 'support_given', c.demand_id, 'support_given:' || c.demand_id || ':' || c.user_id, c.created_at
++     FROM confirmations c JOIN demands d ON d.id = c.demand_id
++     WHERE d.is_approved AND d.author_id <> c.user_id
++     ON CONFLICT (dedupe_key) DO NOTHING`,
++  `INSERT INTO point_transactions (user_id, amount, reason, demand_id, dedupe_key, created_at)
++     SELECT x.author_id, 5, 'support_received', x.demand_id, 'support_received:' || x.demand_id || ':' || x.user_id, x.created_at
++     FROM (
++       SELECT c.demand_id, c.user_id, c.created_at, d.author_id,
++              row_number() OVER (PARTITION BY c.demand_id ORDER BY c.created_at, c.id) AS rn
++       FROM confirmations c JOIN demands d ON d.id = c.demand_id
++       WHERE d.is_approved AND d.author_id <> c.user_id
++     ) x WHERE x.rn <= 10
++     ON CONFLICT (dedupe_key) DO NOTHING`,
++  `INSERT INTO point_transactions (user_id, amount, reason, demand_id, dedupe_key, created_at)
++     SELECT x.author_id, 2, 'comment_posted', x.demand_id, 'comment:' || x.id, x.created_at
++     FROM (
++       SELECT c.id, c.author_id, c.demand_id, c.created_at,
++              row_number() OVER (PARTITION BY c.demand_id, c.author_id ORDER BY c.created_at, c.id) AS rn
++       FROM comments c JOIN demands d ON d.id = c.demand_id
++       WHERE d.is_approved AND NOT c.is_moderated
++     ) x WHERE x.rn <= 3
++     ON CONFLICT (dedupe_key) DO NOTHING`,
++  `INSERT INTO point_transactions (user_id, amount, reason, demand_id, dedupe_key, created_at)
++     SELECT d.author_id, 50, 'demand_resolved', d.id, 'demand_resolved:' || d.id, d.updated_at
++     FROM demands d WHERE d.is_approved AND d.status = 'completed'
++     ON CONFLICT (dedupe_key) DO NOTHING`,
++];
++
++const client = new pg.Client({ connectionString: url });
++await client.connect();
++try {
++  await client.query("BEGIN");
++  for (const q of INSERTS) await client.query(q);
++  const { rows } = await client.query(
++    `SELECT u.id, u.name, u.role, u.points AS atual,
++            COALESCE((SELECT sum(p.amount) FROM point_transactions p WHERE p.user_id = u.id AND p.reversed_at IS NULL), 0)::int AS novo
++     FROM users u
++     WHERE u.points IS DISTINCT FROM COALESCE((SELECT sum(p.amount) FROM point_transactions p WHERE p.user_id = u.id AND p.reversed_at IS NULL), 0)
++     ORDER BY u.id`,
++  );
++  if (rows.length === 0) console.log("ok       users.points já bate com o histórico");
++  for (const r of rows) console.log(`DIFERE   id=${r.id} ${r.name} (${r.role}): atual=${r.atual}  novo=${r.novo}`);
++  if (apply) {
++    await client.query(
++      `UPDATE users u SET points = COALESCE((SELECT sum(p.amount) FROM point_transactions p WHERE p.user_id = u.id AND p.reversed_at IS NULL), 0)`,
++    );
++    await client.query("COMMIT");
++    console.log(`\nAplicado. ${rows.length} usuário(s) com total ajustado.`);
++  } else {
++    await client.query("ROLLBACK");
++    console.log("\nNada foi gravado (rode com --apply para gravar).");
++  }
++} catch (err) {
++  await client.query("ROLLBACK").catch(() => {});
++  console.error(err);
++  process.exitCode = 1;
++} finally {
++  await client.end();
++}
+diff --git a/lib/db/scripts/migrate.mjs b/lib/db/scripts/migrate.mjs
+index 6d2b97e..e515ecf 100644
+--- a/lib/db/scripts/migrate.mjs
++++ b/lib/db/scripts/migrate.mjs
+@@ -31,6 +31,7 @@ const APPLIED_PROBES = [
+   `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'demands' AND column_name = 'is_approved') AS ok`, // 0003_moderacao
+   `SELECT to_regclass('public.auth_attempts_key_created_idx') IS NOT NULL AS ok`, // 0004_tentativas_login
++  `SELECT to_regclass('public.point_transactions_created_idx') IS NOT NULL AS ok`, // 0005_pontos
+ ];
+ 
+ const url = process.env.DATABASE_URL;
+diff --git a/lib/db/scripts/recount.mjs b/lib/db/scripts/recount.mjs
+index aaf74f3..978017a 100644
+--- a/lib/db/scripts/recount.mjs
++++ b/lib/db/scripts/recount.mjs
+@@ -4,7 +4,8 @@
+ //   pnpm --filter @workspace/db run recount -- --apply # grava os valores corretos
+ //
+ // Contadores de bairro, secretaria e categoria contam só demandas APROVADAS (is_approved).
+-// Não mexe em `users.points` (pontuação acumulada, não derivável das linhas).
++// Não mexe em `users.points`: o total de pontos é recalculado a partir do histórico por
++// `backfill-points.mjs`.
+ // Atenção: se o banco tem números de demonstração sem linhas por trás, --apply os substitui
+ // pelos reais. Rode primeiro sem --apply e confira.
+ import pg from "pg";
+diff --git a/lib/db/src/schema/index.ts b/lib/db/src/schema/index.ts
+index c31374e..d99a828 100644
+--- a/lib/db/src/schema/index.ts
++++ b/lib/db/src/schema/index.ts
+@@ -12,3 +12,4 @@ export * from "./public_works";
+ export * from "./activity_log";
+ export * from "./attachments";
+ export * from "./auth_attempts";
++export * from "./point_transactions";
+diff --git a/lib/db/src/schema/point_transactions.ts b/lib/db/src/schema/point_transactions.ts
+new file mode 100644
+index 0000000..6d6caaa
+--- /dev/null
++++ b/lib/db/src/schema/point_transactions.ts
+@@ -0,0 +1,39 @@
++import { pgTable, serial, text, integer, timestamp, index } from "drizzle-orm/pg-core";
++import { usersTable } from "./users";
++import { demandsTable } from "./demands";
++
++/**
++ * Histórico (ledger) de pontos. Cada linha é um ganho de pontos; `users.points` é o total em cache
++ * (soma das linhas ativas, `reversed_at IS NULL`).
++ *
++ * `dedupe_key` é único e identifica o FATO que gerou os pontos (ex.: "demand_resolved:42"). É ele
++ * que impede pontuar duas vezes pelo mesmo fato (reabrir/concluir de novo, apoiar/desapoiar em loop).
++ * Quando o fato é desfeito (apoio removido, comentário moderado), a linha ganha `reversed_at` em vez
++ * de ser apagada; se o fato voltar a valer, a mesma linha é reativada.
++ */
++export const POINT_REASONS = [
++  "demand_published", // demanda sua foi publicada (aprovada)
++  "support_given", // você apoiou a demanda de outra pessoa
++  "support_received", // alguém apoiou a sua demanda
++  "comment_posted", // comentário em demanda
++  "demand_resolved", // demanda sua foi concluída pelo órgão responsável
++] as const;
++export type PointReason = (typeof POINT_REASONS)[number];
++
++export const pointTransactionsTable = pgTable("point_transactions", {
++  id: serial("id").primaryKey(),
++  userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
++  amount: integer("amount").notNull(),
++  reason: text("reason").$type<PointReason>().notNull(),
++  // SET NULL: o histórico do cidadão sobrevive se a demanda for apagada.
++  demandId: integer("demand_id").references(() => demandsTable.id, { onDelete: "set null" }),
++  dedupeKey: text("dedupe_key").notNull().unique(),
++  reversedAt: timestamp("reversed_at"),
++  createdAt: timestamp("created_at").notNull().defaultNow(),
++}, (t) => [
++  index("point_transactions_user_created_idx").on(t.userId, t.createdAt),
++  index("point_transactions_demand_id_idx").on(t.demandId),
++  index("point_transactions_created_idx").on(t.createdAt),
++]);
++
++export type PointTransaction = typeof pointTransactionsTable.$inferSelect;
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 6440653..65a29d0 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -166,6 +166,9 @@ importers:
+ 
+   artifacts/api-server:
+     dependencies:
++      '@google/genai':
++        specifier: ^1.0.0
++        version: 1.52.0
+       '@workspace/api-zod':
+         specifier: workspace:*
+         version: link:../../lib/api-zod
+@@ -777,6 +780,15 @@ packages:
+   '@gerrit0/mini-shiki@3.23.0':
+     resolution: {integrity: sha512-bEMORlG0cqdjVyCEuU0cDQbORWX+kYCeo0kV1lbxF5bt4r7SID2l9bqsxJEM0zndaxpOUT7riCyIVEuqq/Ynxg==}
+ 
++  '@google/genai@1.52.0':
++    resolution: {integrity: sha512-gwSvbpiN/17O9TbsqSsE/OzZcpv5Fo4RQjdngGgogtuB9RsyJ8ZHhX5KjHj1bp5N9snN2eK8LDGXSaWW2hof8Q==}
++    engines: {node: '>=20.0.0'}
++    peerDependencies:
++      '@modelcontextprotocol/sdk': ^1.25.2
++    peerDependenciesMeta:
++      '@modelcontextprotocol/sdk':
++        optional: true
++
+   '@hookform/resolvers@3.10.0':
+     resolution: {integrity: sha512-79Dv+3mDF7i+2ajj7SkypSKHhl1cbln1OGavqrsF7p6mbUv11xpqpacPsGDCTRvCSjEEIez2ef1NveSVL3b0Ag==}
+     peerDependencies:
+@@ -851,6 +863,33 @@ packages:
+   '@pinojs/redact@0.4.0':
+     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
+ 
++  '@protobufjs/aspromise@1.1.2':
++    resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
++
++  '@protobufjs/base64@1.1.2':
++    resolution: {integrity: sha512-AZkcAA5vnN/v4PDqKyMR5lx7hZttPDgClv83E//FMNhR2TMcLUhfRUBHCmSl0oi9zMgDDqRUJkSxO3wm85+XLg==}
++
++  '@protobufjs/codegen@2.0.5':
++    resolution: {integrity: sha512-zgXFLzW3Ap33e6d0Wlj4MGIm6Ce8O89n/apUaGNB/jx+hw+ruWEp7EwGUshdLKVRCxZW12fp9r40E1mQrf/34g==}
++
++  '@protobufjs/eventemitter@1.1.1':
++    resolution: {integrity: sha512-vW1GmwMZNnL+gMRaovlh9yZX74kc+TTU3FObkkurpMaRtBfLP3ldjS9KQWlwZgraRE0+dheEEoAxdzcJQ8eXZg==}
++
++  '@protobufjs/fetch@1.1.1':
++    resolution: {integrity: sha512-GpptLrs57adMSuHi3VNj0mAF8dwh36LMaYF6XyJ6JMWlVsc+t42tm1HSEDmOs3A8fC9yyeisgLhsTVQokOZ0zw==}
++
++  '@protobufjs/float@1.0.2':
++    resolution: {integrity: sha512-Ddb+kVXlXst9d+R9PfTIxh1EdNkgoRe5tOX6t01f1lYWOvJnSPDBlG241QLzcyPdoNTsblLUdujGSE4RzrTZGQ==}
++
++  '@protobufjs/path@1.1.2':
++    resolution: {integrity: sha512-6JOcJ5Tm08dOHAbdR3GrvP+yUUfkjG5ePsHYczMFLq3ZmMkAD98cDgcT2iA1lJ9NVwFd4tH/iSSoe44YWkltEA==}
++
++  '@protobufjs/pool@1.1.0':
++    resolution: {integrity: sha512-0kELaGSIDBKvcgS4zkjz1PeddatrjYcmMWOlAuAPwAeccUrPHdUqo/J6LiymHHEiJT5NrF1UVwxY14f+fy4WQw==}
++
++  '@protobufjs/utf8@1.1.2':
++    resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
++
+   '@radix-ui/number@1.1.1':
+     resolution: {integrity: sha512-MkKCwxlXTgz6CFoJx3pCwn07GKp36+aZyu/u2Ln2VrA5DcdyCZkASEDBTd8x5whTQQL5CiYf4prXKLcgQdv29g==}
+ 
+@@ -1724,6 +1763,9 @@ packages:
+   '@types/react@19.2.14':
+     resolution: {integrity: sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==}
+ 
++  '@types/retry@0.12.0':
++    resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
++
+   '@types/send@1.2.1':
+     resolution: {integrity: sha512-arsCikDvlU99zl1g69TcAB3mzZPpxgw0UQnaHeC1Nwb015xp8bknZv5rIfri9xTOcMuaVgvabfIRA7PSZVuZIQ==}
+ 
+@@ -1748,6 +1790,10 @@ packages:
+     engines: {node: '>=0.4.0'}
+     hasBin: true
+ 
++  agent-base@7.1.4:
++    resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
++    engines: {node: '>= 14'}
++
+   ajv-draft-04@1.0.0:
+     resolution: {integrity: sha512-mv00Te6nmYbRp5DCwclxtt7yV/joXJPGS7nM+97GdxvuttCOfgI3K4U25zboyeX0O+myI8ERluxQe5wljMmVIw==}
+     peerDependencies:
+@@ -1785,11 +1831,17 @@ packages:
+     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
+     engines: {node: 18 || 20 || >=22}
+ 
++  base64-js@1.5.1:
++    resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
++
+   baseline-browser-mapping@2.10.28:
+     resolution: {integrity: sha512-Ic44hnOtFIgravCunj1ifSoQPSUrkNiJuH9Mf6jr2jjoA74icqV8wU0KuadXeOR8zuIJMOoTv0GuQjZ9ZYNMeA==}
+     engines: {node: '>=6.0.0'}
+     hasBin: true
+ 
++  bignumber.js@9.3.1:
++    resolution: {integrity: sha512-Ko0uX15oIUS7wJ3Rb30Fs6SkVbLmPBAKdlm7q9+ak9bbIeFf0MwuBsQV6z7+X768/cHsfg+WlysDWJcmthjsjQ==}
++
+   body-parser@2.2.2:
+     resolution: {integrity: sha512-oP5VkATKlNwcgvxi0vM0p/D3n2C3EReYVX+DNYs5TjZFn/oQt2j+4sVJtSMr18pdRr8wjTcBl6LoV+FUwzPmNA==}
+     engines: {node: '>=18'}
+@@ -1807,6 +1859,9 @@ packages:
+     engines: {node: ^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7}
+     hasBin: true
+ 
++  buffer-equal-constant-time@1.0.1:
++    resolution: {integrity: sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==}
++
+   bytes@3.1.2:
+     resolution: {integrity: sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg==}
+     engines: {node: '>= 0.8'}
+@@ -1939,6 +1994,10 @@ packages:
+     resolution: {integrity: sha512-ndfJ/JxxMd3nw31uyKoY2naivF+r29V+Lc0svZxe1JvvIRmi8hUsrMvdOwgS1o6uBHmiz91geQ0ylPP0aj1VUA==}
+     engines: {node: '>=12'}
+ 
++  data-uri-to-buffer@4.0.1:
++    resolution: {integrity: sha512-0R9ikRb668HB7QDxT1vkpuUBtqc53YyAwMwGeUFKRojY/NWKvdZ+9UYtRfGmhqNbRkTSVpMbmyhXipFFv2cb/A==}
++    engines: {node: '>= 12'}
++
+   date-fns-jalali@4.1.0-0:
+     resolution: {integrity: sha512-hTIP/z+t+qKwBDcmmsnmjWTduxCg+5KfdqWQvb2X/8C9+knYY6epN/pfxdDuyVlSVeFz0sM5eEfwIUQ70U4ckg==}
+ 
+@@ -2083,6 +2142,9 @@ packages:
+     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
+     engines: {node: '>= 0.4'}
+ 
++  ecdsa-sig-formatter@1.0.11:
++    resolution: {integrity: sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==}
++
+   ee-first@1.1.1:
+     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
+ 
+@@ -2177,6 +2239,9 @@ packages:
+     resolution: {integrity: sha512-hIS4idWWai69NezIdRt2xFVofaF4j+6INOpJlVOLDO8zXGpUVEVzIYk12UUi2JzjEzWL3IOAxcTubgz9Po0yXw==}
+     engines: {node: '>= 18'}
+ 
++  extend@3.0.2:
++    resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
++
+   fast-copy@4.0.3:
+     resolution: {integrity: sha512-58apWr0GUiDFM8+3afrO6eYwJBn9ZAhDOzG3L+/9llab/haCARS2UIfffmOurYLwbgDRs8n0rfr6qAAPEAuAQw==}
+ 
+@@ -2209,6 +2274,10 @@ packages:
+       picomatch:
+         optional: true
+ 
++  fetch-blob@3.2.0:
++    resolution: {integrity: sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==}
++    engines: {node: ^12.20 || >= 14.13}
++
+   figures@6.1.0:
+     resolution: {integrity: sha512-d+l3qxjSesT4V7v2fh+QnmFnUWv9lSpjarhShNTgBOfA0ttejbQUAlHLitbjkoRiDulW0OPoQPYIGhIC8ohejg==}
+     engines: {node: '>=18'}
+@@ -2225,6 +2294,10 @@ packages:
+     resolution: {integrity: sha512-JGG8pvDi2C+JxidYdIwQDyS/CgcrIdh18cvgxcBge3wSHRQOrooMD3GlFBcmMJAN9M42SAZjDp5zv1dglJjwww==}
+     engines: {node: '>=20'}
+ 
++  formdata-polyfill@4.0.10:
++    resolution: {integrity: sha512-buewHzMvYL29jdeQTVILecSaZKnt/RJWjoZCF5OW60Z67/GmSLBkOFM7qh1PI3zFNtJbaZL5eQu1vLfazOwj4g==}
++    engines: {node: '>=12.20.0'}
++
+   forwarded@0.2.0:
+     resolution: {integrity: sha512-buRG0fpBtRHSTCOASe6hD258tEubFoRLb4ZNA6NxMVHNw2gOcwHo9wyablzMzOA5z9xA9L1KNjk/Nt6MT9aYow==}
+     engines: {node: '>= 0.6'}
+@@ -2259,6 +2332,14 @@ packages:
+   function-bind@1.1.2:
+     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
+ 
++  gaxios@7.3.1:
++    resolution: {integrity: sha512-kB3rzJV7d9juLZh8/56QTXCwQfxyhdOMdyYk1HdQKFtF8TJTDTZQJtixWIwXdE9Jji91mC41DUNpjleo4L4eAQ==}
++    engines: {node: '>=18'}
++
++  gcp-metadata@8.1.2:
++    resolution: {integrity: sha512-zV/5HKTfCeKWnxG0Dmrw51hEWFGfcF2xiXqcA3+J90WDuP0SvoiSO5ORvcBsifmx/FoIjgQN3oNOGaQ5PhLFkg==}
++    engines: {node: '>=18'}
++
+   gensync@1.0.0-beta.2:
+     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
+     engines: {node: '>=6.9.0'}
+@@ -2294,6 +2375,14 @@ packages:
+     resolution: {integrity: sha512-+A4Hq7m7Ze592k9gZRy4gJ27DrXRNnC1vPjxTt1qQxEY8RxagBkBxivkCwg7FxSTG0iLLEMaUx13oOr0R2/qcQ==}
+     engines: {node: '>=20'}
+ 
++  google-auth-library@10.9.1:
++    resolution: {integrity: sha512-i1ydyHrqcIxXkWh/uBmVkzCvIuq5yiK2ATndIe5XxKholrG/MTYP9xGYka4sQhrbIAgGjL2B6NOE7rFaiF3fXw==}
++    engines: {node: '>=18'}
++
++  google-logging-utils@1.1.3:
++    resolution: {integrity: sha512-eAmLkjDjAFCVXg7A1unxHsLf961m6y17QFqXqAXGj/gVkKFrEICfStRfwUlGNfeCEjNRa32JEWOUTlYXPyyKvA==}
++    engines: {node: '>=14'}
++
+   gopd@1.2.0:
+     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
+     engines: {node: '>= 0.4'}
+@@ -2316,6 +2405,10 @@ packages:
+     resolution: {integrity: sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==}
+     engines: {node: '>= 0.8'}
+ 
++  https-proxy-agent@7.0.6:
++    resolution: {integrity: sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==}
++    engines: {node: '>= 14'}
++
+   human-signals@8.0.1:
+     resolution: {integrity: sha512-eKCa6bwnJhvxj14kZk5NCPc6Hb6BdsU9DZcOnmQKSnO1VKrfV0zCvtttPZUsBvjmNDn8rpcJfpwSYnHBjc95MQ==}
+     engines: {node: '>=18.18.0'}
+@@ -2399,6 +2492,9 @@ packages:
+     engines: {node: '>=6'}
+     hasBin: true
+ 
++  json-bigint@1.0.0:
++    resolution: {integrity: sha512-SiPv/8VpZuWbvLSMtTDU8hEfrZWg/mH/nV/b4o0CYbSxu1UIQPLdwKOCIyLQX+VIPO5vrLX3i8qtqFyhdPSUSQ==}
++
+   json-schema-traverse@1.0.0:
+     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
+ 
+@@ -2414,6 +2510,12 @@ packages:
+     resolution: {integrity: sha512-p/nXbhSEcu3pZRdkW1OfJhpsVtW1gd4Wa1fnQc9YLiTfAjn0312eMKimbdIQzuZl9aa9xUGaRlP9T/CJE/ditQ==}
+     engines: {node: '>=0.10.0'}
+ 
++  jwa@2.0.1:
++    resolution: {integrity: sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==}
++
++  jws@4.0.1:
++    resolution: {integrity: sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==}
++
+   leaflet@1.9.4:
+     resolution: {integrity: sha512-nxS1ynzJOmOlHp+iL3FyWqK89GtNL8U8rvlMOsQdTTssxZwCXh8N2NB3GDQOL+YR3XnWyZAxwQixURb+FA74PA==}
+ 
+@@ -2442,6 +2544,9 @@ packages:
+   lodash@4.18.1:
+     resolution: {integrity: sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==}
+ 
++  long@5.3.2:
++    resolution: {integrity: sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==}
++
+   loose-envify@1.4.0:
+     resolution: {integrity: sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==}
+     hasBin: true
+@@ -2532,6 +2637,15 @@ packages:
+       react: ^16.8 || ^17 || ^18 || ^19 || ^19.0.0-rc
+       react-dom: ^16.8 || ^17 || ^18 || ^19 || ^19.0.0-rc
+ 
++  node-domexception@1.0.0:
++    resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
++    engines: {node: '>=10.5.0'}
++    deprecated: Use your platform's native DOMException instead
++
++  node-fetch@3.3.2:
++    resolution: {integrity: sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==}
++    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
++
+   node-releases@2.0.38:
+     resolution: {integrity: sha512-3qT/88Y3FbH/Kx4szpQQ4HzUbVrHPKTLVpVocKiLfoYvw9XSGOX2FmD2d6DrXbVYyAQTF2HeF6My8jmzx7/CRw==}
+ 
+@@ -2576,6 +2690,10 @@ packages:
+     resolution: {integrity: sha512-wPrq66Llhl7/4AGC6I+cqxT07LhXvWL08LNXz1fENOw0Ap4sRZZ/gZpTTJ5jpurzzzfS2W/Ge9BY3LgLjCShcw==}
+     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+ 
++  p-retry@4.6.2:
++    resolution: {integrity: sha512-312Id396EbJdvRONlngUx0NydfrIQ5lsYu0znKVUzVvArzEIt08V1qhtyESbGVd1FGX7UKtiFp5uwKZdM8wIuQ==}
++    engines: {node: '>=8'}
++
+   parse-ms@4.0.0:
+     resolution: {integrity: sha512-TXfryirbmq34y8QBwgqCVLi+8oA3oWx2eAnSn62ITyEhEYaWRlVZ2DvMM9eZbMs/RfxPu/PK/aBLyGj4IrqMHw==}
+     engines: {node: '>=18'}
+@@ -2702,6 +2820,10 @@ packages:
+   prop-types@15.8.1:
+     resolution: {integrity: sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg==}
+ 
++  protobufjs@7.6.6:
++    resolution: {integrity: sha512-dYDWdjSl5RNb7SgPxGQcRU+GtvP7s2fpkrY0r432PcOIaZ0/rBcxEZnQN67iJhFuQiVw754JDoPruPCNdGsbjg==}
++    engines: {node: '>=12.0.0'}
++
+   proxy-addr@2.0.7:
+     resolution: {integrity: sha512-llQsMLSUDUPT44jdrU/O37qlnifitDP+ZwrmmZcoSKyLKvtZxpyV0n2/bD/N4tBAAZ/gJEdZU7KMraoK1+XYAg==}
+     engines: {node: '>= 0.10'}
+@@ -2859,6 +2981,10 @@ packages:
+   resolve-pkg-maps@1.0.0:
+     resolution: {integrity: sha512-seS2Tj26TBVOC2NIc2rOe2y2ZO7efxITtLZcGSOnHHNOQ7CkiUBfw0Iw2ck6xkIhPwLhKNLS8BO+hEpngQlqzw==}
+ 
++  retry@0.13.1:
++    resolution: {integrity: sha512-XQBQ3I8W1Cge0Seh+6gjj03LbmRFWuoszgK9ooCpwYIrhhoO80pfq4cUkU5DkknwfOfFteRwlZ56PYOGYyFWdg==}
++    engines: {node: '>= 4'}
++
+   reusify@1.1.0:
+     resolution: {integrity: sha512-g6QUff04oZpHs0eG5p83rFLhHeV00ug/Yf9nZM6fLeUrPguBTkTQOdpAWWspMh55TZfVQDPaN3NQJfbVRAxdIw==}
+     engines: {iojs: '>=1.0.0', node: '>=0.10.0'}
+@@ -2875,6 +3001,9 @@ packages:
+   run-parallel@1.2.0:
+     resolution: {integrity: sha512-5l4VyZR86LZ/lDxZTR6jqL8AFE2S0IFLMP26AbjsLVADxHdhB/c0GUsH+y39UfCi3dzz8OlQuPmnaJOMoDHQBA==}
+ 
++  safe-buffer@5.2.1:
++    resolution: {integrity: sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==}
++
+   safe-stable-stringify@2.5.0:
+     resolution: {integrity: sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA==}
+     engines: {node: '>=10'}
+@@ -3164,6 +3293,10 @@ packages:
+       yaml:
+         optional: true
+ 
++  web-streams-polyfill@3.3.3:
++    resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
++    engines: {node: '>= 8'}
++
+   which@2.0.2:
+     resolution: {integrity: sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==}
+     engines: {node: '>= 8'}
+@@ -3177,6 +3310,18 @@ packages:
+   wrappy@1.0.2:
+     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
+ 
++  ws@8.22.0:
++    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
++    engines: {node: '>=10.0.0'}
++    peerDependencies:
++      bufferutil: ^4.0.1
++      utf-8-validate: '>=5.0.2'
++    peerDependenciesMeta:
++      bufferutil:
++        optional: true
++      utf-8-validate:
++        optional: true
++
+   xtend@4.0.2:
+     resolution: {integrity: sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ==}
+     engines: {node: '>=0.4'}
+@@ -3352,6 +3497,17 @@ snapshots:
+       '@shikijs/types': 3.23.0
+       '@shikijs/vscode-textmate': 10.0.2
+ 
++  '@google/genai@1.52.0':
++    dependencies:
++      google-auth-library: 10.9.1
++      p-retry: 4.6.2
++      protobufjs: 7.6.6
++      ws: 8.22.0
++    transitivePeerDependencies:
++      - bufferutil
++      - supports-color
++      - utf-8-validate
++
+   '@hookform/resolvers@3.10.0(react-hook-form@7.75.0(react@19.1.0))':
+     dependencies:
+       react-hook-form: 7.75.0(react@19.1.0)
+@@ -3498,6 +3654,26 @@ snapshots:
+ 
+   '@pinojs/redact@0.4.0': {}
+ 
++  '@protobufjs/aspromise@1.1.2': {}
++
++  '@protobufjs/base64@1.1.2': {}
++
++  '@protobufjs/codegen@2.0.5': {}
++
++  '@protobufjs/eventemitter@1.1.1': {}
++
++  '@protobufjs/fetch@1.1.1':
++    dependencies:
++      '@protobufjs/aspromise': 1.1.2
++
++  '@protobufjs/float@1.0.2': {}
++
++  '@protobufjs/path@1.1.2': {}
++
++  '@protobufjs/pool@1.1.0': {}
++
++  '@protobufjs/utf8@1.1.2': {}
++
+   '@radix-ui/number@1.1.1': {}
+ 
+   '@radix-ui/primitive@1.1.3': {}
+@@ -4432,6 +4608,8 @@ snapshots:
+     dependencies:
+       csstype: 3.2.3
+ 
++  '@types/retry@0.12.0': {}
++
+   '@types/send@1.2.1':
+     dependencies:
+       '@types/node': 25.6.2
+@@ -4462,6 +4640,8 @@ snapshots:
+ 
+   acorn@8.16.0: {}
+ 
++  agent-base@7.1.4: {}
++
+   ajv-draft-04@1.0.0(ajv@8.20.0):
+     optionalDependencies:
+       ajv: 8.20.0
+@@ -4491,8 +4671,12 @@ snapshots:
+ 
+   balanced-match@4.0.4: {}
+ 
++  base64-js@1.5.1: {}
++
+   baseline-browser-mapping@2.10.28: {}
+ 
++  bignumber.js@9.3.1: {}
++
+   body-parser@2.2.2:
+     dependencies:
+       bytes: 3.1.2
+@@ -4523,6 +4707,8 @@ snapshots:
+       node-releases: 2.0.38
+       update-browserslist-db: 1.2.3(browserslist@4.28.2)
+ 
++  buffer-equal-constant-time@1.0.1: {}
++
+   bytes@3.1.2: {}
+ 
+   call-bind-apply-helpers@1.0.2:
+@@ -4639,6 +4825,8 @@ snapshots:
+ 
+   d3-timer@3.0.1: {}
+ 
++  data-uri-to-buffer@4.0.1: {}
++
+   date-fns-jalali@4.1.0-0: {}
+ 
+   date-fns@3.6.0: {}
+@@ -4687,6 +4875,10 @@ snapshots:
+       es-errors: 1.3.0
+       gopd: 1.2.0
+ 
++  ecdsa-sig-formatter@1.0.11:
++    dependencies:
++      safe-buffer: 5.2.1
++
+   ee-first@1.1.1: {}
+ 
+   electron-to-chromium@1.5.353: {}
+@@ -4799,6 +4991,8 @@ snapshots:
+     transitivePeerDependencies:
+       - supports-color
+ 
++  extend@3.0.2: {}
++
+   fast-copy@4.0.3: {}
+ 
+   fast-deep-equal@3.1.3: {}
+@@ -4825,6 +5019,11 @@ snapshots:
+     optionalDependencies:
+       picomatch: 4.0.4
+ 
++  fetch-blob@3.2.0:
++    dependencies:
++      node-domexception: 1.0.0
++      web-streams-polyfill: 3.3.3
++
+   figures@6.1.0:
+     dependencies:
+       is-unicode-supported: 2.1.0
+@@ -4849,6 +5048,10 @@ snapshots:
+       locate-path: 8.0.0
+       unicorn-magic: 0.3.0
+ 
++  formdata-polyfill@4.0.10:
++    dependencies:
++      fetch-blob: 3.2.0
++
+   forwarded@0.2.0: {}
+ 
+   framer-motion@12.38.0(react-dom@19.1.0(react@19.1.0))(react@19.1.0):
+@@ -4873,6 +5076,22 @@ snapshots:
+ 
+   function-bind@1.1.2: {}
+ 
++  gaxios@7.3.1:
++    dependencies:
++      extend: 3.0.2
++      https-proxy-agent: 7.0.6
++      node-fetch: 3.3.2
++    transitivePeerDependencies:
++      - supports-color
++
++  gcp-metadata@8.1.2:
++    dependencies:
++      gaxios: 7.3.1
++      google-logging-utils: 1.1.3
++      json-bigint: 1.0.0
++    transitivePeerDependencies:
++      - supports-color
++
+   gensync@1.0.0-beta.2: {}
+ 
+   get-caller-file@2.0.5: {}
+@@ -4919,6 +5138,19 @@ snapshots:
+       slash: 5.1.0
+       unicorn-magic: 0.4.0
+ 
++  google-auth-library@10.9.1:
++    dependencies:
++      base64-js: 1.5.1
++      ecdsa-sig-formatter: 1.0.11
++      gaxios: 7.3.1
++      gcp-metadata: 8.1.2
++      google-logging-utils: 1.1.3
++      jws: 4.0.1
++    transitivePeerDependencies:
++      - supports-color
++
++  google-logging-utils@1.1.3: {}
++
+   gopd@1.2.0: {}
+ 
+   graceful-fs@4.2.11: {}
+@@ -4939,6 +5171,13 @@ snapshots:
+       statuses: 2.0.2
+       toidentifier: 1.0.1
+ 
++  https-proxy-agent@7.0.6:
++    dependencies:
++      agent-base: 7.1.4
++      debug: 4.4.3
++    transitivePeerDependencies:
++      - supports-color
++
+   human-signals@8.0.1: {}
+ 
+   iconv-lite@0.7.2:
+@@ -4990,6 +5229,10 @@ snapshots:
+ 
+   jsesc@3.1.0: {}
+ 
++  json-bigint@1.0.0:
++    dependencies:
++      bignumber.js: 9.3.1
++
+   json-schema-traverse@1.0.0: {}
+ 
+   json5@2.2.3: {}
+@@ -5002,6 +5245,17 @@ snapshots:
+ 
+   jsonpointer@5.0.1: {}
+ 
++  jwa@2.0.1:
++    dependencies:
++      buffer-equal-constant-time: 1.0.1
++      ecdsa-sig-formatter: 1.0.11
++      safe-buffer: 5.2.1
++
++  jws@4.0.1:
++    dependencies:
++      jwa: 2.0.1
++      safe-buffer: 5.2.1
++
+   leaflet@1.9.4: {}
+ 
+   leven@4.1.0: {}
+@@ -5025,6 +5279,8 @@ snapshots:
+ 
+   lodash@4.18.1: {}
+ 
++  long@5.3.2: {}
++
+   loose-envify@1.4.0:
+     dependencies:
+       js-tokens: 4.0.0
+@@ -5100,6 +5356,14 @@ snapshots:
+       react: 19.1.0
+       react-dom: 19.1.0(react@19.1.0)
+ 
++  node-domexception@1.0.0: {}
++
++  node-fetch@3.3.2:
++    dependencies:
++      data-uri-to-buffer: 4.0.1
++      fetch-blob: 3.2.0
++      formdata-polyfill: 4.0.10
++
+   node-releases@2.0.38: {}
+ 
+   npm-run-path@6.0.0:
+@@ -5167,6 +5431,11 @@ snapshots:
+     dependencies:
+       p-limit: 4.0.0
+ 
++  p-retry@4.6.2:
++    dependencies:
++      '@types/retry': 0.12.0
++      retry: 0.13.1
++
+   parse-ms@4.0.0: {}
+ 
+   parseurl@1.3.3: {}
+@@ -5302,6 +5571,20 @@ snapshots:
+       object-assign: 4.1.1
+       react-is: 16.13.1
+ 
++  protobufjs@7.6.6:
++    dependencies:
++      '@protobufjs/aspromise': 1.1.2
++      '@protobufjs/base64': 1.1.2
++      '@protobufjs/codegen': 2.0.5
++      '@protobufjs/eventemitter': 1.1.1
++      '@protobufjs/fetch': 1.1.1
++      '@protobufjs/float': 1.0.2
++      '@protobufjs/path': 1.1.2
++      '@protobufjs/pool': 1.1.0
++      '@protobufjs/utf8': 1.1.2
++      '@types/node': 25.6.2
++      long: 5.3.2
++
+   proxy-addr@2.0.7:
+     dependencies:
+       forwarded: 0.2.0
+@@ -5447,6 +5730,8 @@ snapshots:
+ 
+   resolve-pkg-maps@1.0.0: {}
+ 
++  retry@0.13.1: {}
++
+   reusify@1.1.0: {}
+ 
+   rollup@4.60.3:
+@@ -5470,6 +5755,8 @@ snapshots:
+     dependencies:
+       queue-microtask: 1.2.3
+ 
++  safe-buffer@5.2.1: {}
++
+   safe-stable-stringify@2.5.0: {}
+ 
+   safer-buffer@2.1.2: {}
+@@ -5720,6 +6007,8 @@ snapshots:
+       tsx: 4.21.0
+       yaml: 2.8.4
+ 
++  web-streams-polyfill@3.3.3: {}
++
+   which@2.0.2:
+     dependencies:
+       isexe: 2.0.0
+@@ -5733,6 +6022,8 @@ snapshots:
+ 
+   wrappy@1.0.2: {}
+ 
++  ws@8.22.0: {}
++
+   xtend@4.0.2: {}
+ 
+   yallist@3.1.1: {}
+-- 
+2.43.0
+
