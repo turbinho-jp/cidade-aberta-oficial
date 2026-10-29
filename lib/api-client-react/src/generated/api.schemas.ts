@@ -587,6 +587,28 @@ export interface UserProfile {
   createdAt: string;
 }
 
+export type PointTransactionReason = typeof PointTransactionReason[keyof typeof PointTransactionReason];
+
+
+export const PointTransactionReason = {
+  demand_published: 'demand_published',
+  support_given: 'support_given',
+  support_received: 'support_received',
+  comment_posted: 'comment_posted',
+  demand_resolved: 'demand_resolved',
+} as const;
+
+export interface PointTransaction {
+  id: number;
+  amount: number;
+  reason: PointTransactionReason;
+  /** @nullable */
+  demandId?: number | null;
+  /** @nullable */
+  demandTitle?: string | null;
+  createdAt: string;
+}
+
 export interface CitizenRankItem {
   userId: number;
   name: string;
@@ -641,6 +663,20 @@ limit?: number;
 };
 
 export type GetCitizenRankingParams = {
+limit?: number;
+period?: GetCitizenRankingPeriod;
+neighborhoodId?: number;
+};
+
+export type GetCitizenRankingPeriod = typeof GetCitizenRankingPeriod[keyof typeof GetCitizenRankingPeriod];
+
+
+export const GetCitizenRankingPeriod = {
+  all: 'all',
+  month: 'month',
+} as const;
+
+export type GetMyPointHistoryParams = {
 limit?: number;
 };
 

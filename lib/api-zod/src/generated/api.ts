@@ -1176,10 +1176,14 @@ export const GetUserProfileResponse = zod.object({
 
 
 /**
+ * Sem filtros devolve o ranking geral (total acumulado). Com `period=month` e/ou `neighborhoodId`, `points` é o total daquele período/bairro.
+
  * @summary Get citizen participation ranking
  */
 export const GetCitizenRankingQueryParams = zod.object({
-  "limit": zod.coerce.number().optional()
+  "limit": zod.coerce.number().optional(),
+  "period": zod.enum(['all', 'month']).optional(),
+  "neighborhoodId": zod.coerce.number().optional()
 })
 
 export const GetCitizenRankingResponseItem = zod.object({
@@ -1192,5 +1196,23 @@ export const GetCitizenRankingResponseItem = zod.object({
   "rank": zod.number().optional()
 })
 export const GetCitizenRankingResponse = zod.array(GetCitizenRankingResponseItem)
+
+
+/**
+ * @summary Histórico de pontos da pessoa autenticada
+ */
+export const GetMyPointHistoryQueryParams = zod.object({
+  "limit": zod.coerce.number().optional()
+})
+
+export const GetMyPointHistoryResponseItem = zod.object({
+  "id": zod.number(),
+  "amount": zod.number(),
+  "reason": zod.enum(['demand_published', 'support_given', 'support_received', 'comment_posted', 'demand_resolved']),
+  "demandId": zod.number().nullish(),
+  "demandTitle": zod.string().nullish(),
+  "createdAt": zod.string()
+})
+export const GetMyPointHistoryResponse = zod.array(GetMyPointHistoryResponseItem)
 
 

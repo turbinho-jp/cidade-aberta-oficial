@@ -9,6 +9,7 @@ import {
   Settings, LogIn, UserPlus, ShieldCheck
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LevelBadge } from "@/components/level-badge";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated, isAdmin, isSecretary } = useAuth();
@@ -90,6 +91,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   <Button variant="ghost" size="sm" className="gap-2">
                     <UserCircle className="w-5 h-5" />
                     <span className="max-w-[100px] truncate">{user?.name}</span>
+                    {user?.role === "citizen" && <LevelBadge points={user.points} compact />}
                   </Button>
                 </Link>
                 <Button variant="ghost" size="icon" onClick={handleLogout} title="Sair">

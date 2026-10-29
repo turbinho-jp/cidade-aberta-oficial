@@ -38,6 +38,7 @@ import type {
   Department,
   DepartmentStats,
   GetCitizenRankingParams,
+  GetMyPointHistoryParams,
   GetRecentActivityParams,
   HealthStatus,
   ListDemandsParams,
@@ -46,6 +47,7 @@ import type {
   LoginInput,
   Neighborhood,
   NeighborhoodStats,
+  PointTransaction,
   PublicWork,
   PublicWorkInput,
   RegisterInput,
@@ -2868,6 +2870,8 @@ export const getGetCitizenRankingUrl = (params?: GetCitizenRankingParams,) => {
 }
 
 /**
+ * Sem filtros devolve o ranking geral (total acumulado). Com `period=month` e/ou `neighborhoodId`, `points` é o total daquele período/bairro.
+
  * @summary Get citizen participation ranking
  */
 export const getCitizenRanking = async (params?: GetCitizenRankingParams, options?: RequestInit): Promise<CitizenRankItem[]> => {
@@ -2924,6 +2928,90 @@ export function useGetCitizenRanking<TData = Awaited<ReturnType<typeof getCitize
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetCitizenRankingQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getGetMyPointHistoryUrl = (params?: GetMyPointHistoryParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/users/me/points?${stringifiedParams}` : `/api/users/me/points`
+}
+
+/**
+ * @summary Histórico de pontos da pessoa autenticada
+ */
+export const getMyPointHistory = async (params?: GetMyPointHistoryParams, options?: RequestInit): Promise<PointTransaction[]> => {
+
+  return customFetch<PointTransaction[]>(getGetMyPointHistoryUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMyPointHistoryQueryKey = (params?: GetMyPointHistoryParams,) => {
+    return [
+    `/api/users/me/points`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetMyPointHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getMyPointHistory>>, TError = ErrorType<unknown>>(params?: GetMyPointHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMyPointHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMyPointHistoryQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMyPointHistory>>> = ({ signal }) => getMyPointHistory(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMyPointHistory>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetMyPointHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getMyPointHistory>>>
+export type GetMyPointHistoryQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Histórico de pontos da pessoa autenticada
+ */
+
+export function useGetMyPointHistory<TData = Awaited<ReturnType<typeof getMyPointHistory>>, TError = ErrorType<unknown>>(
+ params?: GetMyPointHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMyPointHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetMyPointHistoryQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

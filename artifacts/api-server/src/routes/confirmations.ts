@@ -5,10 +5,9 @@ import { requireAuth } from "../lib/auth";
 import { parseId, sendValidationError } from "../lib/validate";
 import { logActivity } from "../lib/activity";
 import { canSee } from "../lib/visibility";
+import { awardPoints, revokePoints, countActive, POINTS, SUPPORT_RECEIVED_CAP } from "../lib/gamification";
 
 const router = Router();
-
-const POINTS_PER_CONFIRMATION = 3;
 
 router.post("/demands/:id/confirm", requireAuth, async (req, res) => {
   try {
@@ -36,8 +35,23 @@ router.post("/demands/:id/confirm", requireAuth, async (req, res) => {
         .where(eq(demandsTable.id, demandId)).returning();
       await tx.update(usersTable).set({
         confirmationsCount: sql`${usersTable.confirmationsCount} + 1`,
-        points: sql`${usersTable.points} + ${POINTS_PER_CONFIRMATION}`,
       }).where(eq(usersTable.id, currentUser.id));
+      // Pontos só por apoiar a demanda de OUTRA pessoa (apoiar a própria não rende nada) e só em
+      // demanda já publicada. A chave por (demanda, apoiador) faz apoiar/desapoiar em loop render
+      // uma vez só; o autor tem teto de apoios que pontuam, para limitar contas de fachada.
+      if (demand?.isApproved && demand.authorId !== currentUser.id) {
+        await awardPoints(tx, {
+          userId: currentUser.id, amount: POINTS.SUPPORT_GIVEN, reason: "support_given",
+          dedupeKey: `support_given:${demandId}:${currentUser.id}`, demandId,
+        });
+        const receivedKey = `support_received:${demandId}:${currentUser.id}`;
+        if ((await countActive(tx, { demandId, reason: "support_received" })) < SUPPORT_RECEIVED_CAP) {
+          await awardPoints(tx, {
+            userId: demand.authorId, amount: POINTS.SUPPORT_RECEIVED, reason: "support_received",
+            dedupeKey: receivedKey, demandId,
+          });
+        }
+      }
       return { created: true, demand };
     });
 
@@ -71,8 +85,9 @@ router.delete("/demands/:id/confirm", requireAuth, async (req, res) => {
         .where(eq(demandsTable.id, demandId));
       await tx.update(usersTable).set({
         confirmationsCount: sql`GREATEST(${usersTable.confirmationsCount} - 1, 0)`,
-        points: sql`GREATEST(${usersTable.points} - ${POINTS_PER_CONFIRMATION}, 0)`,
       }).where(eq(usersTable.id, currentUser.id));
+      await revokePoints(tx, `support_given:${demandId}:${currentUser.id}`);
+      await revokePoints(tx, `support_received:${demandId}:${currentUser.id}`);
     });
     res.status(204).send();
   } catch (err) {
