@@ -181,6 +181,35 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
 }
 
+/**
+ * Usar DEPOIS de `requireAuth`. Quem ainda não confirmou o e-mail só navega: apoiar, comentar e validar
+ * resolução respondem 403 com `code: "EMAIL_NOT_VERIFIED"` (o front usa o código para orientar a pessoa).
+ * A equipe da prefeitura é dispensada: as contas dela são criadas pela gestão, não por cadastro aberto.
+ */
+export async function requireVerifiedEmail(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = (req as any).currentUser as SessionUser | undefined;
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (isStaff(user.role)) {
+      next();
+      return;
+    }
+    const [row] = await db.select({ verifiedAt: usersTable.emailVerifiedAt }).from(usersTable)
+      .where(eq(usersTable.id, user.id)).limit(1);
+    if (!row?.verifiedAt) {
+      res.status(403).json({ error: "Email not verified", code: "EMAIL_NOT_VERIFIED" });
+      return;
+    }
+    next();
+  } catch (err) {
+    req.log?.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+}
+
 /** Exige um dos papéis informados: 401 sem sessão, 403 com papel insuficiente. */
 export function requireRole(...roles: readonly Role[]) {
   return async (req: Request, res: Response, next: NextFunction) => {

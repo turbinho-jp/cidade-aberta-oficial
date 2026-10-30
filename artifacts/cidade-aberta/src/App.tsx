@@ -18,6 +18,7 @@ import Profile from "@/pages/profile";
 import Ranking from "@/pages/ranking";
 import Login from "@/pages/login";
 import Register from "@/pages/register";
+import VerifyEmail from "@/pages/verify-email";
 import AdminDashboard from "@/pages/admin-dashboard";
 import AdminServiceOrders from "@/pages/admin-service-orders";
 import AdminModeration from "@/pages/admin-moderation";
@@ -51,6 +52,7 @@ function Router() {
 
       <Route path="/login" component={Login} />
       <Route path="/cadastro" component={Register} />
+      <Route path="/verificar-email" component={VerifyEmail} />
       
       <Route component={NotFound} />
     </Switch>

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, confirmationsTable, demandsTable, usersTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
-import { requireAuth } from "../lib/auth";
+import { requireAuth, requireVerifiedEmail } from "../lib/auth";
 import { parseId, sendValidationError } from "../lib/validate";
 import { logActivity } from "../lib/activity";
 import { canSee } from "../lib/visibility";
@@ -9,7 +9,7 @@ import { awardPoints, revokePoints, countActive, POINTS, SUPPORT_RECEIVED_CAP } 
 
 const router = Router();
 
-router.post("/demands/:id/confirm", requireAuth, async (req, res) => {
+router.post("/demands/:id/confirm", requireAuth, requireVerifiedEmail, async (req, res) => {
   try {
     const demandId = parseId(req.params.id);
     if (demandId === null) return sendValidationError(res, { id: "id inválido" });

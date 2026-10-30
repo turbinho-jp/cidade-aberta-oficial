@@ -53,6 +53,7 @@ export const LoginResponse = zod.object({
   "demandsCount": zod.number().optional(),
   "confirmationsCount": zod.number().optional(),
   "commentsCount": zod.number().optional(),
+  "emailVerified": zod.boolean().optional().describe('false enquanto a pessoa não confirmar o e-mail pelo link (não pode apoiar, comentar nem validar)'),
   "createdAt": zod.string()
 })
 })
@@ -72,7 +73,29 @@ export const GetMeResponse = zod.object({
   "demandsCount": zod.number().optional(),
   "confirmationsCount": zod.number().optional(),
   "commentsCount": zod.number().optional(),
+  "emailVerified": zod.boolean().optional().describe('false enquanto a pessoa não confirmar o e-mail pelo link (não pode apoiar, comentar nem validar)'),
   "createdAt": zod.string()
+})
+
+
+/**
+ * @summary Confirmar o e-mail com o token recebido por e-mail
+ */
+export const VerifyEmailBody = zod.object({
+  "token": zod.string()
+})
+
+export const VerifyEmailResponse = zod.object({
+  "verified": zod.boolean()
+})
+
+
+/**
+ * @summary Reenviar o e-mail de confirmação para quem está logado
+ */
+export const ResendVerificationResponse = zod.object({
+  "sent": zod.boolean(),
+  "alreadyVerified": zod.boolean()
 })
 
 

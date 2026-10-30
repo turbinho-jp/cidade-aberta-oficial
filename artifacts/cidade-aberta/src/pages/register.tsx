@@ -33,7 +33,7 @@ export default function Register() {
     const { acceptTerms: _accepted, ...payload } = data;
     registerMutation.mutate({ data: payload }, {
       onSuccess: () => {
-        toast({ title: "Conta criada com sucesso!", description: "Bem-vindo ao Cidade Aberta." });
+        toast({ title: "Conta criada com sucesso!", description: "Enviamos um link de confirmação para o seu e-mail. Confirme para poder apoiar e comentar." });
         setLocation("/");
       },
       onError: (err: any) => {

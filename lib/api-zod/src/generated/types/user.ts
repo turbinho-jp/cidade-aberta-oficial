@@ -20,5 +20,7 @@ export interface User {
   demandsCount?: number;
   confirmationsCount?: number;
   commentsCount?: number;
+  /** false enquanto a pessoa não confirmar o e-mail pelo link (não pode apoiar, comentar nem validar) */
+  emailVerified?: boolean;
   createdAt: string;
 }
