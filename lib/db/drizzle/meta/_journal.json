@@ -43,6 +43,13 @@
       "when": 1793306532472,
       "tag": "0005_pontos",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793321869885,
+      "tag": "0006_validacao_resolucao",
+      "breakpoints": true
     }
   ]
 }

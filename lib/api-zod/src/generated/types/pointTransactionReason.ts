@@ -15,4 +15,6 @@ export const PointTransactionReason = {
   support_received: 'support_received',
   comment_posted: 'comment_posted',
   demand_resolved: 'demand_resolved',
+  resolution_validated: 'resolution_validated',
+  resolution_validation_received: 'resolution_validation_received',
 } as const;

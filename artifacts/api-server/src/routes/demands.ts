@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { db, demandsTable, categoriesTable, neighborhoodsTable, departmentsTable, timelineTable, confirmationsTable, serviceOrdersTable, teamsTable, usersTable, demandStatusEnum, demandPriorityEnum } from "@workspace/db";
+import { db, demandsTable, categoriesTable, neighborhoodsTable, departmentsTable, timelineTable, confirmationsTable, serviceOrdersTable, teamsTable, usersTable, demandStatusEnum, demandPriorityEnum, resolutionValidationsTable } from "@workspace/db";
 import { eq, and, or, sql, ilike, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireAdmin, optionalAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
-import { awardPoints, revokePoints, POINTS } from "../lib/gamification";
+import { awardPoints, revokePoints, POINTS, resolutionValidationKeys } from "../lib/gamification";
 import { isManager as isStaff, visibleTo, canSee } from "../lib/visibility";
 import { publicName, publicNameOrNull } from "../lib/public-name";
 import { syncNeighborhoodCounters, syncDepartmentCounters, type Tx } from "../lib/counters";
@@ -217,6 +217,15 @@ router.get("/demands/:id", optionalAuth, async (req, res) => {
       isConfirmedByMe = !!conf;
     }
 
+    const [{ validationsCount }] = await db.select({ validationsCount: sql<number>`count(*)::int` })
+      .from(resolutionValidationsTable).where(eq(resolutionValidationsTable.demandId, id));
+    let isResolutionValidatedByMe = false;
+    if (currentUser) {
+      const [mine] = await db.select({ id: resolutionValidationsTable.id }).from(resolutionValidationsTable)
+        .where(and(eq(resolutionValidationsTable.demandId, id), eq(resolutionValidationsTable.userId, currentUser.id))).limit(1);
+      isResolutionValidatedByMe = !!mine;
+    }
+
     const [categories, neighborhoods, departments, timeline, serviceOrders, attachmentsByDemand] = await Promise.all([
       db.select().from(categoriesTable).where(eq(categoriesTable.id, demand.categoryId)),
       db.select().from(neighborhoodsTable).where(eq(neighborhoodsTable.id, demand.neighborhoodId)),
@@ -232,6 +241,7 @@ router.get("/demands/:id", optionalAuth, async (req, res) => {
 
     res.json({
       ...formatDemand(demand, categories[0], neighborhoods[0], departments[0], isConfirmedByMe, attachmentsByDemand.get(id)),
+      validationsCount, isResolutionValidatedByMe,
       timeline: timeline.map(t => ({
         id: t.id, demandId: t.demandId, event: t.event, description: t.description,
         actorName: t.actorRole === "citizen" ? publicNameOrNull(t.actorName) : t.actorName, actorRole: t.actorRole, statusFrom: t.statusFrom,
@@ -402,6 +412,13 @@ router.patch("/demands/:id/status", requireAdmin, async (req, res) => {
           await awardPoints(tx, { userId: existing.authorId, amount: POINTS.DEMAND_RESOLVED, reason: "demand_resolved", dedupeKey: key, demandId: id });
         } else if (wasCompleted && status !== "completed") {
           await revokePoints(tx, key);
+          // A resolução deixou de valer: as confirmações da comunidade e os pontos delas caem junto.
+          const removed = await tx.delete(resolutionValidationsTable)
+            .where(eq(resolutionValidationsTable.demandId, id))
+            .returning({ userId: resolutionValidationsTable.userId });
+          for (const v of removed) {
+            for (const k of resolutionValidationKeys(id, v.userId)) await revokePoints(tx, k);
+          }
         }
       }
       return { existing, demand: updated, wasCompleted };

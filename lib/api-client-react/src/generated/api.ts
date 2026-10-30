@@ -51,6 +51,7 @@ import type {
   PublicWork,
   PublicWorkInput,
   RegisterInput,
+  ResolutionValidationResult,
   ServiceOrder,
   ServiceOrderInput,
   ServiceOrderUpdate,
@@ -1250,6 +1251,146 @@ export const useUnconfirmDemand = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getUnconfirmDemandMutationOptions(options));
+    }
+
+export const getValidateResolutionUrl = (id: number,) => {
+
+
+
+
+  return `/api/demands/${id}/validate-resolution`
+}
+
+/**
+ * @summary Confirmar que uma demanda concluída foi mesmo resolvida (cidadão que não é o autor)
+ */
+export const validateResolution = async (id: number, options?: RequestInit): Promise<ResolutionValidationResult> => {
+
+  return customFetch<ResolutionValidationResult>(getValidateResolutionUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getValidateResolutionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof validateResolution>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof validateResolution>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['validateResolution'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof validateResolution>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  validateResolution(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ValidateResolutionMutationResult = NonNullable<Awaited<ReturnType<typeof validateResolution>>>
+
+    export type ValidateResolutionMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Confirmar que uma demanda concluída foi mesmo resolvida (cidadão que não é o autor)
+ */
+export const useValidateResolution = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof validateResolution>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof validateResolution>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getValidateResolutionMutationOptions(options));
+    }
+
+export const getUnvalidateResolutionUrl = (id: number,) => {
+
+
+
+
+  return `/api/demands/${id}/validate-resolution`
+}
+
+/**
+ * @summary Remove a validação de resolução
+ */
+export const unvalidateResolution = async (id: number, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getUnvalidateResolutionUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getUnvalidateResolutionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof unvalidateResolution>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof unvalidateResolution>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['unvalidateResolution'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof unvalidateResolution>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  unvalidateResolution(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UnvalidateResolutionMutationResult = NonNullable<Awaited<ReturnType<typeof unvalidateResolution>>>
+
+    export type UnvalidateResolutionMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Remove a validação de resolução
+ */
+export const useUnvalidateResolution = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof unvalidateResolution>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof unvalidateResolution>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getUnvalidateResolutionMutationOptions(options));
     }
 
 export const getListCategoriesUrl = () => {

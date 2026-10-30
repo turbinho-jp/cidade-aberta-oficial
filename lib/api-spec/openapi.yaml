@@ -362,6 +362,39 @@ paths:
         "204":
           description: Removed
 
+  /demands/{id}/validate-resolution:
+    post:
+      operationId: validateResolution
+      tags: [confirmations]
+      summary: Confirmar que uma demanda concluída foi mesmo resolvida (cidadão que não é o autor)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Validation status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolutionValidationResult"
+
+    delete:
+      operationId: unvalidateResolution
+      tags: [confirmations]
+      summary: Remove a validação de resolução
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Removed
+
   # CATEGORIES
   /categories:
     get:
@@ -985,6 +1018,11 @@ components:
           type: integer
         isConfirmedByMe:
           type: boolean
+        validationsCount:
+          type: integer
+          description: Quantas pessoas confirmaram que a demanda concluída foi mesmo resolvida
+        isResolutionValidatedByMe:
+          type: boolean
         authorId:
           type: integer
         authorName:
@@ -1138,6 +1176,15 @@ components:
         content:
           type: string
           minLength: 1
+
+    ResolutionValidationResult:
+      type: object
+      required: [validated, total]
+      properties:
+        validated:
+          type: boolean
+        total:
+          type: integer
 
     # CONFIRMATION
     ConfirmationResult:
@@ -1534,7 +1581,7 @@ components:
           type: integer
         reason:
           type: string
-          enum: [demand_published, support_given, support_received, comment_posted, demand_resolved]
+          enum: [demand_published, support_given, support_received, comment_posted, demand_resolved, resolution_validated, resolution_validation_received]
         demandId:
           type: ["integer", "null"]
         demandTitle:

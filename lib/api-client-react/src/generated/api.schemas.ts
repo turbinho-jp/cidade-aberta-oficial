@@ -282,6 +282,9 @@ export interface DemandDetail {
   confirmationsCount: number;
   commentsCount: number;
   isConfirmedByMe?: boolean;
+  /** Quantas pessoas confirmaram que a demanda concluída foi mesmo resolvida */
+  validationsCount?: number;
+  isResolutionValidatedByMe?: boolean;
   authorId: number;
   authorName?: string;
   /** @nullable */
@@ -361,6 +364,11 @@ export interface Comment {
 export interface CommentInput {
   /** @minLength 1 */
   content: string;
+}
+
+export interface ResolutionValidationResult {
+  validated: boolean;
+  total: number;
 }
 
 export interface ConfirmationResult {
@@ -596,6 +604,8 @@ export const PointTransactionReason = {
   support_received: 'support_received',
   comment_posted: 'comment_posted',
   demand_resolved: 'demand_resolved',
+  resolution_validated: 'resolution_validated',
+  resolution_validation_received: 'resolution_validation_received',
 } as const;
 
 export interface PointTransaction {
