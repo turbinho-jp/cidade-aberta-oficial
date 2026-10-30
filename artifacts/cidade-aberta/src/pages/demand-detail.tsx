@@ -9,6 +9,7 @@ import {
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { isEmailNotVerified, EMAIL_NOT_VERIFIED_TOAST } from "@/lib/email-verification";
 import { PhotoGallery } from "@/components/photo-gallery";
 import { PhotoPicker, type PickedPhoto } from "@/components/photo-picker";
 import { coverUrl, uploadAttachment } from "@/lib/attachments";
@@ -115,6 +116,11 @@ export default function DemandDetail() {
       confirmMutation.mutate({ id: demandId }, {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: getGetDemandQueryKey(demandId) });
+        },
+        onError: (err) => {
+          toast(isEmailNotVerified(err)
+            ? EMAIL_NOT_VERIFIED_TOAST
+            : { title: "Não foi possível registrar o apoio", description: "Tente novamente em instantes.", variant: "destructive" });
         }
       });
     }
@@ -127,7 +133,9 @@ export default function DemandDetail() {
       return;
     }
     const done = () => queryClient.invalidateQueries({ queryKey: getGetDemandQueryKey(demandId) });
-    const fail = () => toast({ title: "Não foi possível registrar", description: "Tente novamente em instantes.", variant: "destructive" });
+    const fail = (err: unknown) => toast(isEmailNotVerified(err)
+      ? EMAIL_NOT_VERIFIED_TOAST
+      : { title: "Não foi possível registrar", description: "Tente novamente em instantes.", variant: "destructive" });
     if (demand?.isResolutionValidatedByMe) {
       unvalidateMutation.mutate({ id: demandId }, { onSuccess: done, onError: fail });
     } else {
@@ -146,6 +154,11 @@ export default function DemandDetail() {
         // Assume we have a getListCommentsQueryKey, invalidate it or refetch
         // Orval generated hooks don't always export list query keys cleanly without params
         queryClient.invalidateQueries({ queryKey: [`/api/demands/${demandId}/comments`] });
+      },
+      onError: (err) => {
+        toast(isEmailNotVerified(err)
+          ? EMAIL_NOT_VERIFIED_TOAST
+          : { title: "Não foi possível comentar", description: "Tente novamente em instantes.", variant: "destructive" });
       }
     });
   };

@@ -106,6 +106,46 @@ paths:
         "401":
           description: Unauthorized
 
+  /auth/verify-email:
+    post:
+      operationId: verifyEmail
+      tags: [auth]
+      summary: Confirmar o e-mail com o token recebido por e-mail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyEmailInput"
+      responses:
+        "200":
+          description: E-mail confirmado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyEmailResult"
+        "400":
+          description: Token inválido ou já usado
+        "410":
+          description: Token expirado
+
+  /auth/resend-verification:
+    post:
+      operationId: resendVerification
+      tags: [auth]
+      summary: Reenviar o e-mail de confirmação para quem está logado
+      responses:
+        "200":
+          description: Resultado do reenvio
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResendVerificationResult"
+        "429":
+          description: Muitos pedidos
+        "503":
+          description: Não foi possível enviar o e-mail
+
   /auth/logout:
     post:
       operationId: logout
@@ -910,8 +950,34 @@ components:
           type: integer
         commentsCount:
           type: integer
+        emailVerified:
+          type: boolean
+          description: false enquanto a pessoa não confirmar o e-mail pelo link (não pode apoiar, comentar nem validar)
         createdAt:
           type: string
+
+    VerifyEmailInput:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+
+    VerifyEmailResult:
+      type: object
+      required: [verified]
+      properties:
+        verified:
+          type: boolean
+
+    ResendVerificationResult:
+      type: object
+      required: [sent, alreadyVerified]
+      properties:
+        sent:
+          type: boolean
+        alreadyVerified:
+          type: boolean
 
     # DEMAND
     Demand:

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LevelBadge } from "@/components/level-badge";
+import { EmailVerificationBanner } from "@/components/email-verification-banner";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated, isAdmin, isSecretary } = useAuth();
@@ -118,6 +119,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </header>
+
+      <EmailVerificationBanner />
 
       {/* Mobile Menu */}
       {isMobileMenuOpen && (

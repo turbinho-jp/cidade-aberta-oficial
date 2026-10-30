@@ -14,3 +14,4 @@ export * from "./attachments";
 export * from "./auth_attempts";
 export * from "./point_transactions";
 export * from "./resolution_validations";
+export * from "./email_verification_tokens";

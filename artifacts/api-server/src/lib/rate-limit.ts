@@ -12,6 +12,7 @@ import { and, eq, sql } from "drizzle-orm";
  *   Contrapartida conhecida: alguém pode errar de propósito a senha de outra pessoa e travar o
  *   login dela por até 15 minutos.
  * - Cadastro: conta toda tentativa, por IP, numa janela de 1 hora.
+ * - Reenvio do e-mail de verificação: conta todo pedido, por usuário, numa janela de 1 hora.
  */
 const MINUTE = 60_000;
 export const LOGIN_WINDOW_MS = 15 * MINUTE;
@@ -19,6 +20,8 @@ export const REGISTER_WINDOW_MS = 60 * MINUTE;
 const LOGIN_MAX_FAILS_PER_IP = 30;
 const LOGIN_MAX_FAILS_PER_EMAIL = 10;
 const REGISTER_MAX_PER_IP = 20;
+export const VERIFY_RESEND_WINDOW_MS = 60 * MINUTE;
+const VERIFY_RESEND_MAX_PER_USER = 3;
 
 const ipKey = (kind: string, ip: string) => `${kind}:ip:${ip}`;
 const emailKey = (kind: string, email: string) => `${kind}:email:${email.toLowerCase()}`;
@@ -59,5 +62,14 @@ export async function registerAttemptBlocked(ip: string): Promise<boolean> {
   const n = await countRecent(ipKey("register", ip), REGISTER_WINDOW_MS);
   if (n >= REGISTER_MAX_PER_IP) return true;
   await record([ipKey("register", ip)]);
+  return false;
+}
+
+/** Registra o pedido de novo e-mail de verificação e diz se passou do limite (true = bloquear). */
+export async function verificationResendBlocked(userId: number): Promise<boolean> {
+  const key = `verify-resend:user:${userId}`;
+  const n = await countRecent(key, VERIFY_RESEND_WINDOW_MS);
+  if (n >= VERIFY_RESEND_MAX_PER_USER) return true;
+  await record([key]);
   return false;
 }

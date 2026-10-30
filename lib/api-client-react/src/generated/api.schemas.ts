@@ -47,11 +47,26 @@ export interface User {
   demandsCount?: number;
   confirmationsCount?: number;
   commentsCount?: number;
+  /** false enquanto a pessoa não confirmar o e-mail pelo link (não pode apoiar, comentar nem validar) */
+  emailVerified?: boolean;
   createdAt: string;
 }
 
 export interface AuthResponse {
   user: User;
+}
+
+export interface VerifyEmailInput {
+  token: string;
+}
+
+export interface VerifyEmailResult {
+  verified: boolean;
+}
+
+export interface ResendVerificationResult {
+  sent: boolean;
+  alreadyVerified: boolean;
 }
 
 export type DemandStatus = typeof DemandStatus[keyof typeof DemandStatus];

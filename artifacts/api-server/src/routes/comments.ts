@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, commentsTable, demandsTable, usersTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
-import { requireAuth, optionalAuth, isStaff } from "../lib/auth";
+import { requireAuth, requireVerifiedEmail, optionalAuth, isStaff } from "../lib/auth";
 import { canSee } from "../lib/visibility";
 import { publicName } from "../lib/public-name";
 import { parseBody, parseId, sendValidationError, text } from "../lib/validate";
@@ -32,7 +32,7 @@ router.get("/demands/:id/comments", optionalAuth, async (req, res) => {
   }
 });
 
-router.post("/demands/:id/comments", requireAuth, async (req, res) => {
+router.post("/demands/:id/comments", requireAuth, requireVerifiedEmail, async (req, res) => {
   try {
     const demandId = parseId(req.params.id);
     if (demandId === null) return sendValidationError(res, { id: "id inválido" });

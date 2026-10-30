@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, demandsTable, resolutionValidationsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
-import { requireAuth } from "../lib/auth";
+import { requireAuth, requireVerifiedEmail } from "../lib/auth";
 import { parseId, sendValidationError } from "../lib/validate";
 import { canSee } from "../lib/visibility";
 import {
@@ -16,7 +16,7 @@ const STAFF_ROLES = ["admin", "secretary", "moderator"];
 // Confirmar que uma demanda CONCLUÍDA foi mesmo resolvida ("conferi no local"). Vale uma vez por
 // pessoa (unicidade no banco). Não valida quem é do órgão nem o próprio autor: a ideia é a
 // comunidade conferir o trabalho, não a prefeitura nem o interessado se autoconfirmarem.
-router.post("/demands/:id/validate-resolution", requireAuth, async (req, res) => {
+router.post("/demands/:id/validate-resolution", requireAuth, requireVerifiedEmail, async (req, res) => {
   try {
     const demandId = parseId(req.params.id);
     if (demandId === null) return sendValidationError(res, { id: "id inválido" });

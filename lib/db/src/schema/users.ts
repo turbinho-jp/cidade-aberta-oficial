@@ -16,6 +16,8 @@ export const usersTable = pgTable("users", {
   demandsCount: integer("demands_count").notNull().default(0),
   confirmationsCount: integer("confirmations_count").notNull().default(0),
   commentsCount: integer("comments_count").notNull().default(0),
+  /** Quando a pessoa confirmou o e-mail pelo link. NULL = ainda não verificou (ver routes/auth.ts). */
+  emailVerifiedAt: timestamp("email_verified_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
