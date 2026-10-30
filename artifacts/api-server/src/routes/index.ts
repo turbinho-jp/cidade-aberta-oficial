@@ -1,4 +1,3 @@
-import geminiRouter from './gemini';
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import authRouter from "./auth";
@@ -31,6 +30,5 @@ router.use(publicWorksRouter);
 router.use(dashboardRouter);
 router.use(usersRouter);
 router.use(attachmentsRouter);
-router.use(geminiRouter);
 
 export default router;
