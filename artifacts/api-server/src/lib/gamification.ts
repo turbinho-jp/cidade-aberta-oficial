@@ -20,12 +20,22 @@ export const POINTS = {
   COMMENT: 2,
   /** Autor, quando o órgão responsável conclui a demanda. */
   DEMAND_RESOLVED: 50,
+  /** Quem confirma que a demanda de outra pessoa foi mesmo resolvida. */
+  RESOLUTION_VALIDATED: 15,
+  /** Autor, por cada confirmação de que a sua demanda foi mesmo resolvida. */
+  RESOLUTION_VALIDATION_RECEIVED: 15,
 } as const;
 
 /** Limite de apoios que rendem pontos ao autor por demanda (50 pontos no máximo). */
 export const SUPPORT_RECEIVED_CAP = 10;
+/** Validações de resolução que rendem pontos por demanda (cada uma paga a quem valida e ao autor). */
+export const RESOLUTION_VALIDATIONS_CAP = 3;
 /** Comentários que rendem pontos, por pessoa e por demanda. */
 export const COMMENTS_PER_DEMAND_CAP = 3;
+
+/** Chaves dos dois lançamentos de uma validação de resolução (quem valida e o autor). */
+export const resolutionValidationKeys = (demandId: number, userId: number) =>
+  [`resolution_validated:${demandId}:${userId}`, `resolution_validation_received:${demandId}:${userId}`] as const;
 
 interface Award {
   userId: number;

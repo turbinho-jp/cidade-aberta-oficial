@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import resolutionValidationsRouter from "./resolution-validations";
 import healthRouter from "./health";
 import authRouter from "./auth";
 import demandsRouter from "./demands";
@@ -30,5 +31,6 @@ router.use(publicWorksRouter);
 router.use(dashboardRouter);
 router.use(usersRouter);
 router.use(attachmentsRouter);
+router.use(resolutionValidationsRouter);
 
 export default router;

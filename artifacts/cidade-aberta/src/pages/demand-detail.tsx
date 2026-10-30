@@ -4,7 +4,7 @@ import { Layout } from "@/components/layout";
 import { useAuth } from "@/lib/auth";
 import { 
   useGetDemand, useGetDemandTimeline, useListComments, 
-  useCreateComment, useConfirmDemand, useUnconfirmDemand,
+  useCreateComment, useConfirmDemand, useUnconfirmDemand, useValidateResolution, useUnvalidateResolution,
   getGetDemandQueryKey, getGetDemandTimelineQueryKey, getListCommentsQueryKey, deleteAttachment
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -37,6 +37,8 @@ export default function DemandDetail() {
 
   const confirmMutation = useConfirmDemand();
   const unconfirmMutation = useUnconfirmDemand();
+  const validateMutation = useValidateResolution();
+  const unvalidateMutation = useUnvalidateResolution();
   const commentMutation = useCreateComment();
 
   const [newComment, setNewComment] = useState("");
@@ -115,6 +117,21 @@ export default function DemandDetail() {
           queryClient.invalidateQueries({ queryKey: getGetDemandQueryKey(demandId) });
         }
       });
+    }
+  };
+
+  // Confirmar que uma demanda concluída foi mesmo resolvida. Não vale para o autor nem para a equipe.
+  const handleValidateToggle = () => {
+    if (!isAuthenticated) {
+      toast({ title: "Faça login", description: "Você precisa estar logado para confirmar a resolução." });
+      return;
+    }
+    const done = () => queryClient.invalidateQueries({ queryKey: getGetDemandQueryKey(demandId) });
+    const fail = () => toast({ title: "Não foi possível registrar", description: "Tente novamente em instantes.", variant: "destructive" });
+    if (demand?.isResolutionValidatedByMe) {
+      unvalidateMutation.mutate({ id: demandId }, { onSuccess: done, onError: fail });
+    } else {
+      validateMutation.mutate({ id: demandId }, { onSuccess: done, onError: fail });
     }
   };
 
@@ -351,6 +368,29 @@ export default function DemandDetail() {
                   <ThumbsUp className={`w-5 h-5 mr-2 ${demand.isConfirmedByMe ? 'fill-current' : ''}`} />
                   {demand.isConfirmedByMe ? "Apoio Registrado" : "Também me afeta"}
                 </Button>
+
+                {demand.status === "completed" && (
+                  <div className="mt-6 pt-6 border-t border-border text-left space-y-3">
+                    <p className="text-sm font-semibold flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-primary" />
+                      {demand.validationsCount === 1
+                        ? "1 pessoa confirmou que foi resolvido"
+                        : `${demand.validationsCount ?? 0} pessoas confirmaram que foi resolvido`}
+                    </p>
+                    {user && user.id !== demand.authorId && user.role !== "admin" && user.role !== "secretary" && user.role !== "moderator" && (
+                      <Button
+                        type="button"
+                        variant={demand.isResolutionValidatedByMe ? "default" : "outline"}
+                        className="w-full font-semibold"
+                        onClick={handleValidateToggle}
+                        disabled={validateMutation.isPending || unvalidateMutation.isPending}
+                      >
+                        <CheckCircle2 className="w-4 h-4 mr-2" />
+                        {demand.isResolutionValidatedByMe ? "Você confirmou" : "Conferi: foi resolvido"}
+                      </Button>
+                    )}
+                  </div>
+                )}
 
                 <Button type="button" variant="outline" size="lg" className="w-full mt-3 font-semibold" onClick={handleShare}>
                   <Share2 className="w-5 h-5 mr-2" />

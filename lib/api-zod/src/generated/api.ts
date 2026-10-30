@@ -211,6 +211,8 @@ export const GetDemandResponse = zod.object({
   "confirmationsCount": zod.number(),
   "commentsCount": zod.number(),
   "isConfirmedByMe": zod.boolean().optional(),
+  "validationsCount": zod.number().optional().describe('Quantas pessoas confirmaram que a demanda concluída foi mesmo resolvida'),
+  "isResolutionValidatedByMe": zod.boolean().optional(),
   "authorId": zod.number(),
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
@@ -499,6 +501,27 @@ export const ConfirmDemandResponse = zod.object({
  * @summary Remove confirmation from demand
  */
 export const UnconfirmDemandParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+
+/**
+ * @summary Confirmar que uma demanda concluída foi mesmo resolvida (cidadão que não é o autor)
+ */
+export const ValidateResolutionParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const ValidateResolutionResponse = zod.object({
+  "validated": zod.boolean(),
+  "total": zod.number()
+})
+
+
+/**
+ * @summary Remove a validação de resolução
+ */
+export const UnvalidateResolutionParams = zod.object({
   "id": zod.coerce.number()
 })
 
@@ -1208,7 +1231,7 @@ export const GetMyPointHistoryQueryParams = zod.object({
 export const GetMyPointHistoryResponseItem = zod.object({
   "id": zod.number(),
   "amount": zod.number(),
-  "reason": zod.enum(['demand_published', 'support_given', 'support_received', 'comment_posted', 'demand_resolved']),
+  "reason": zod.enum(['demand_published', 'support_given', 'support_received', 'comment_posted', 'demand_resolved', 'resolution_validated', 'resolution_validation_received']),
   "demandId": zod.number().nullish(),
   "demandTitle": zod.string().nullish(),
   "createdAt": zod.string()

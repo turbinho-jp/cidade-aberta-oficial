@@ -48,6 +48,7 @@ export * from './publicWorkInput';
 export * from './publicWorkInputStatus';
 export * from './publicWorkStatus';
 export * from './registerInput';
+export * from './resolutionValidationResult';
 export * from './serviceOrder';
 export * from './serviceOrderInput';
 export * from './serviceOrderInputPriority';

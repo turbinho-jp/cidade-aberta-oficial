@@ -37,6 +37,9 @@ export interface DemandDetail {
   confirmationsCount: number;
   commentsCount: number;
   isConfirmedByMe?: boolean;
+  /** Quantas pessoas confirmaram que a demanda concluída foi mesmo resolvida */
+  validationsCount?: number;
+  isResolutionValidatedByMe?: boolean;
   authorId: number;
   authorName?: string;
   /** @nullable */

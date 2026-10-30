@@ -17,6 +17,8 @@ export const POINT_REASONS = [
   "support_received", // alguém apoiou a sua demanda
   "comment_posted", // comentário em demanda
   "demand_resolved", // demanda sua foi concluída pelo órgão responsável
+  "resolution_validated", // você confirmou que a demanda de outra pessoa foi mesmo resolvida
+  "resolution_validation_received", // alguém confirmou que a sua demanda foi mesmo resolvida
 ] as const;
 export type PointReason = (typeof POINT_REASONS)[number];
 

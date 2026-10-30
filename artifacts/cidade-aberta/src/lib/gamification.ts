@@ -54,6 +54,8 @@ export const REASON_LABELS: Record<string, string> = {
   support_received: "Apoio na sua demanda",
   comment_posted: "Comentário",
   demand_resolved: "Demanda resolvida",
+  resolution_validated: "Você confirmou que foi resolvido",
+  resolution_validation_received: "Confirmaram que sua demanda foi resolvida",
 };
 
 /** Como ganhar pontos (espelha as regras do servidor). */
@@ -63,6 +65,8 @@ export const HOW_TO_EARN: { label: string; points: number; note?: string }[] = [
   { label: "Alguém apoiar a sua demanda", points: 5, note: "até 10 apoios por demanda" },
   { label: "Comentar numa demanda", points: 2, note: "até 3 comentários por demanda" },
   { label: "Sua demanda ser resolvida pelo órgão", points: 50 },
+  { label: "Confirmar que a demanda de outra pessoa foi mesmo resolvida", points: 15, note: "até 3 confirmações por demanda" },
+  { label: "Alguém confirmar que a sua demanda foi resolvida", points: 15, note: "até 3 confirmações por demanda" },
 ];
 
 export interface Achievement {
