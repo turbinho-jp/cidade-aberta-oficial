@@ -83,30 +83,34 @@ export async function sendVerificationEmail(to: string, name: string, token: str
   }
 }
 
-const STATUS_EMAIL: Record<string, { subject: string; headline: string }> = {
+const STATUS_EMAIL = {
+  // Moderação: a demanda passou a ser pública. Não é o status "approved" (esse vem da equipe, ao encaminhar).
+  published: { subject: "foi publicada", headline: "Sua demanda foi aprovada pela moderação e já está visível para todos no Cidade Aberta." },
   approved: { subject: "foi aprovada", headline: "Sua demanda foi aprovada e já está em análise pela prefeitura." },
   in_progress: { subject: "está em andamento", headline: "Boa notícia: a prefeitura começou a atuar na sua demanda." },
   completed: { subject: "foi marcada como resolvida", headline: "Sua demanda foi marcada como resolvida. Confira e confirme se o problema realmente acabou." },
   rejected: { subject: "não pôde ser atendida", headline: "Sua demanda não pôde ser aceita. Veja o motivo na página dela." },
   closed: { subject: "foi encerrada", headline: "Sua demanda foi encerrada." },
-};
+} satisfies Record<string, { subject: string; headline: string }>;
+
+export type StatusEmailKind = keyof typeof STATUS_EMAIL;
 
 /** Status que geram aviso ao autor. Os demais (open, under_review) são internos e não notificam. */
-export const NOTIFIABLE_STATUSES = Object.keys(STATUS_EMAIL);
+export const NOTIFIABLE_STATUSES: string[] = Object.keys(STATUS_EMAIL).filter((k) => k !== "published");
 
 /** Avisa o autor que a demanda mudou de status. Nunca lança; devolve true se o SMTP aceitou. */
 export async function sendDemandStatusEmail(
   to: string,
   name: string,
   demand: { id: number; title: string },
-  status: string,
+  status: StatusEmailKind,
   note?: string | null,
 ): Promise<boolean> {
   const copy = STATUS_EMAIL[status];
   const t = getTransporter();
   const base = appUrl();
   if (!copy || !t || !base) {
-    if (copy) logger.warn({ hasSmtp: !!t, hasAppUrl: !!base }, "Aviso de status não enviado: SMTP_* ou APP_URL não configurados");
+    if (copy) logger.warn({ demandId: demand.id, status, hasSmtp: !!t, hasAppUrl: !!base }, "Aviso de status não enviado: SMTP_* ou APP_URL não configurados");
     return false;
   }
   const link = `${base}/demandas/${demand.id}`;
@@ -129,9 +133,10 @@ export async function sendDemandStatusEmail(
         (noteText ? `<p style="border-left:3px solid #0f766e;padding-left:10px;color:#333">${escapeHtml(noteText)}</p>` : "") +
         `<p><a href="${link}" style="display:inline-block;padding:12px 20px;background:#0f766e;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Acompanhar minha demanda</a></p>`,
     });
+    logger.info({ demandId: demand.id, status }, "Aviso de status enviado ao autor");
     return true;
   } catch (err) {
-    logger.error({ err }, "Falha ao enviar o aviso de status");
+    logger.error({ err, demandId: demand.id, status }, "Falha ao enviar o aviso de status");
     return false;
   }
 }

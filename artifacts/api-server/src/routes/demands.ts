@@ -3,7 +3,8 @@ import { db, demandsTable, categoriesTable, neighborhoodsTable, departmentsTable
 import { eq, and, or, sql, ilike, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireAdmin, optionalAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
-import { sendDemandStatusEmail, NOTIFIABLE_STATUSES } from "../lib/mailer";
+import { notifyDemandAuthor, NOTIFIABLE_STATUSES } from "../lib/notify";
+import type { StatusEmailKind } from "../lib/mailer";
 import { awardPoints, revokePoints, POINTS, resolutionValidationKeys } from "../lib/gamification";
 import { isManager as isStaff, visibleTo, canSee } from "../lib/visibility";
 import { publicName, publicNameOrNull } from "../lib/public-name";
@@ -338,15 +339,8 @@ router.patch("/demands/:id/approve", requireAdmin, async (req, res) => {
         demandId: id, demandTitle: result.existing.title,
         actorName: result.existing.authorName, neighborhoodName: neighborhood?.name,
       });
-      try {
-        const [author] = await db.select({ email: usersTable.email, name: usersTable.name, verified: usersTable.emailVerifiedAt })
-          .from(usersTable).where(eq(usersTable.id, result.existing.authorId)).limit(1);
-        if (author?.verified && author.email) {
-          await sendDemandStatusEmail(author.email, author.name, { id, title: result.existing.title }, "approved");
-        }
-      } catch (mailErr) {
-        req.log.error(mailErr);
-      }
+      // Falha de e-mail só vai pro log (notifyDemandAuthor nunca lança).
+      await notifyDemandAuthor({ id, title: result.existing.title, authorId: result.existing.authorId }, "published");
     }
 
     res.json(formatDemand(result.demand));
@@ -444,18 +438,15 @@ router.patch("/demands/:id/status", requireAdmin, async (req, res) => {
       await logActivity({ type: "status_changed", description: `Status atualizado para ${status}: ${existing.title}`, demandId: id, demandTitle: existing.title, actorName: currentUser.name, neighborhoodName });
     }
 
-    // Avisa o autor por e-mail (só se a mudança foi real, a demanda já é pública e o e-mail foi verificado).
-    // Falha de SMTP nunca derruba a rota: o status já foi salvo.
-    if (existing.status !== status && existing.isApproved && NOTIFIABLE_STATUSES.includes(status)) {
-      try {
-        const [author] = await db.select({ email: usersTable.email, name: usersTable.name, verified: usersTable.emailVerifiedAt })
-          .from(usersTable).where(eq(usersTable.id, existing.authorId)).limit(1);
-        if (author?.verified && author.email) {
-          await sendDemandStatusEmail(author.email, author.name, { id, title: existing.title }, status, publicResponse || note);
-        }
-      } catch (mailErr) {
-        req.log.error(mailErr);
-      }
+    // Avisa o autor por e-mail. Só se o status mudou de fato e é um dos notificáveis. Demanda ainda
+    // não publicada só avisa na rejeição (moderação): o autor enxerga a própria demanda pendente.
+    // Falha de SMTP nunca derruba a rota (o status já foi salvo): fica registrada no log.
+    if (existing.status !== status && NOTIFIABLE_STATUSES.includes(status) && (existing.isApproved || status === "rejected")) {
+      await notifyDemandAuthor(
+        { id, title: existing.title, authorId: existing.authorId },
+        status as StatusEmailKind,
+        publicResponse || note,
+      );
     }
 
     res.json(formatDemand(demand));

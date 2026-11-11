@@ -4,6 +4,7 @@ import { eq, and, inArray } from "drizzle-orm";
 import { requireAdmin } from "../lib/auth";
 import { logActivity } from "../lib/activity";
 import { syncTeamCounters } from "../lib/counters";
+import { notifyDemandAuthor } from "../lib/notify";
 import {
   parseBody, parseQuery, parseId, sendValidationError, paginationFields,
   text, int, oneOf, isoDate, optional, nullable,
@@ -67,12 +68,13 @@ router.post("/service-orders", requireAdmin, async (req, res) => {
     const { demandId, title, description, priority, teamId, estimatedCompletion, slaHours } = body.value;
     const currentUser = (req as any).currentUser as { id: number; role: string; name: string };
 
-    const [target] = await db.select({ id: demandsTable.id, title: demandsTable.title }).from(demandsTable).where(eq(demandsTable.id, demandId)).limit(1);
+    const [target] = await db.select({ id: demandsTable.id, title: demandsTable.title, authorId: demandsTable.authorId, isApproved: demandsTable.isApproved }).from(demandsTable).where(eq(demandsTable.id, demandId)).limit(1);
     if (!target) return sendValidationError(res, { demandId: "demanda não encontrada" });
     if (teamId) {
       const [team] = await db.select({ id: teamsTable.id }).from(teamsTable).where(eq(teamsTable.id, teamId)).limit(1);
       if (!team) return sendValidationError(res, { teamId: "equipe não encontrada" });
     }
+    let promoted = false;
     const order = await db.transaction(async (tx) => {
       const [created] = await tx.insert(serviceOrdersTable).values({
         demandId, title, description: description || null, priority,
@@ -84,11 +86,17 @@ router.post("/service-orders", requireAdmin, async (req, res) => {
       await tx.insert(timelineTable).values({ demandId, event: "Ordem de serviço criada", description: title, actorName: currentUser.name, actorRole: currentUser.role });
       // Criar a OS só "aprova" demandas ainda em triagem. Antes ela rebaixava qualquer demanda
       // (inclusive concluída) para `approved`, o que desfazia o resultado sem ajustar os contadores.
-      await tx.update(demandsTable).set({ status: "approved", updatedAt: new Date() })
-        .where(and(eq(demandsTable.id, demandId), inArray(demandsTable.status, ["open", "under_review"])));
+      const moved = await tx.update(demandsTable).set({ status: "approved", updatedAt: new Date() })
+        .where(and(eq(demandsTable.id, demandId), inArray(demandsTable.status, ["open", "under_review"])))
+        .returning({ id: demandsTable.id });
+      promoted = moved.length > 0;
       await syncTeamCounters(tx, [created.teamId]);
       return created;
     });
+    // A OS moveu a demanda para "aprovada": avisa o autor (só se a demanda já é pública).
+    if (promoted && target.isApproved) {
+      await notifyDemandAuthor({ id: target.id, title: target.title, authorId: target.authorId }, "approved");
+    }
     await logActivity({ type: "service_order_created", description: `OS criada: ${title}`, demandId, demandTitle: target.title, actorName: currentUser.name });
 
     res.status(201).json(formatOrder(order));
