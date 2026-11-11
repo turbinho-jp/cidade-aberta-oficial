@@ -10,15 +10,17 @@ import { Layout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardDescription } from "@/components/ui/card";
-import { Megaphone, MapPin, Camera, Loader2 } from "lucide-react";
+import { Megaphone, MapPin, Camera, Loader2, EyeOff } from "lucide-react";
 import { LocationPicker } from "@/components/location-picker";
 import { PhotoPicker, type PickedPhoto } from "@/components/photo-picker";
 import { uploadAttachment } from "@/lib/attachments";
 import { SERVICE_AREA } from "@/lib/geo";
 import { SlaNotice } from "@/components/sla-notice";
+import { buildAutoTitle } from "@/lib/demand-title";
 
 const LOCATION_REQUIRED = "Marque o local do problema no mapa";
 const OUT_OF_AREA = "O local deve estar na área de atendimento (João Pessoa e região)";
@@ -29,6 +31,7 @@ const demandSchema = z.object({
   categoryId: z.coerce.number().min(1, "Selecione uma categoria"),
   neighborhoodId: z.coerce.number().min(1, "Selecione um bairro"),
   address: z.string().min(5, "Informe o endereço ou referência"),
+  isAnonymous: z.boolean().default(false),
   lat: z
     .number({ required_error: LOCATION_REQUIRED, invalid_type_error: LOCATION_REQUIRED })
     .min(SERVICE_AREA.south, OUT_OF_AREA)
@@ -77,6 +80,7 @@ export default function DemandCreate() {
       title: "",
       description: "",
       address: "",
+      isAnonymous: false,
     },
   });
 
@@ -85,6 +89,19 @@ export default function DemandCreate() {
   const [locating, setLocating] = useState(false);
   const addressTouched = useRef(false);
   const neighborhoodTouched = useRef(false);
+
+  const watchedCategoryId = form.watch("categoryId");
+  const watchedNeighborhoodId = form.watch("neighborhoodId");
+  const watchedAddress = form.watch("address");
+  const watchedTitle = form.watch("title");
+  const autoTitlePreview =
+    watchedCategoryId && watchedAddress?.trim().length >= 5
+      ? buildAutoTitle(
+          categories?.find((c) => c.id === Number(watchedCategoryId))?.name,
+          neighborhoods?.find((n) => n.id === Number(watchedNeighborhoodId))?.name,
+          watchedAddress,
+        )
+      : null;
 
   const lat = form.watch("lat");
   const lng = form.watch("lng");
@@ -137,13 +154,10 @@ export default function DemandCreate() {
     const neighborhood = neighborhoods?.find((n) => n.id === data.neighborhoodId);
     const categoryName = category?.name ?? "Problema urbano";
 
-    const shortAddress = data.address.split(",")[0]?.trim();
-    const title =
-      data.title?.trim() ||
-      `${categoryName}${neighborhood ? ` em ${neighborhood.name}` : ""}${shortAddress ? ` — ${shortAddress}` : ""}`.slice(0, 120);
+    const title = data.title?.trim() || buildAutoTitle(categoryName, neighborhood?.name, data.address);
     const description = data.description?.trim() || `${categoryName} reportado em ${data.address}.`;
 
-    const payload = { ...data, title, description };
+    const payload = { ...data, title, description, isAnonymous: data.isAnonymous === true };
 
     // lat/lng vêm do local marcado pelo usuário no mapa (LocationPicker).
     createMutation.mutate({ data: payload }, {
@@ -196,7 +210,7 @@ export default function DemandCreate() {
             <ul className="list-disc pl-5 space-y-0.5">
               <li>Descreva o problema e o local. Não cite nomes de pessoas.</li>
               <li>Não fotografe rostos, crianças nem placas de veículos.</li>
-              <li>As fotos, o endereço e a descrição ficam públicos. Seu nome aparece abreviado (ex.: Maria S.).</li>
+              <li>As fotos, o endereço e a descrição ficam públicos. Seu nome aparece abreviado (ex.: Maria S.), a menos que você escolha ficar anônimo(a).</li>
               <li>Toda demanda passa por moderação e só aparece para o público depois de aprovada.</li>
             </ul>
           </div>
@@ -284,6 +298,11 @@ export default function DemandCreate() {
                       <FormControl>
                         <Input maxLength={80} placeholder="Ex.: Poste queimado na esquina da Rua X" className="bg-muted/50" {...field} />
                       </FormControl>
+                      {!watchedTitle?.trim() && autoTitlePreview && (
+                        <p className="text-xs text-muted-foreground">
+                          Se deixar em branco, o título será: <span className="font-medium text-foreground">{autoTitlePreview}</span>
+                        </p>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}
@@ -371,6 +390,32 @@ export default function DemandCreate() {
                     )}
                   />
                 </div>
+
+                <FormField
+                  control={form.control}
+                  name="isAnonymous"
+                  render={({ field }) => (
+                    <FormItem className="rounded-xl border border-border/60 bg-muted/20 p-4 flex flex-row items-start gap-3 space-y-0">
+                      <FormControl>
+                        <Checkbox
+                          id="anonymous"
+                          checked={field.value === true}
+                          onCheckedChange={(v) => field.onChange(v === true)}
+                          className="mt-0.5"
+                        />
+                      </FormControl>
+                      <div className="space-y-1">
+                        <FormLabel htmlFor="anonymous" className="font-semibold flex items-center gap-2 cursor-pointer">
+                          <EyeOff className="w-4 h-4" /> Manter minha identidade anônima
+                        </FormLabel>
+                        <p className="text-xs text-muted-foreground">
+                          Esta demanda aparecerá como "Cidadão(a)" no feed, nos cards e na página pública, e não entrará no seu perfil público.
+                          A prefeitura mantém o registro interno do autor, para moderação e para avisar você sobre o andamento.
+                        </p>
+                      </div>
+                    </FormItem>
+                  )}
+                />
 
                 <div className="pt-2 flex justify-end gap-4">
                   <Button variant="outline" type="button" onClick={() => setLocation("/")}>

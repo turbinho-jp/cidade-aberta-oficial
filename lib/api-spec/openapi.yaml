@@ -1033,6 +1033,9 @@ components:
         isApproved:
           type: boolean
           description: false enquanto a demanda aguarda moderação (só autor e gestão a veem)
+        isAnonymous:
+          type: boolean
+          description: true quando o autor pediu anonimato (o público vê "Cidadão(a)")
         createdAt:
           type: string
         updatedAt:
@@ -1098,6 +1101,9 @@ components:
         isApproved:
           type: boolean
           description: false enquanto a demanda aguarda moderação (só autor e gestão a veem)
+        isAnonymous:
+          type: boolean
+          description: true quando o autor pediu anonimato (o público vê "Cidadão(a)")
         createdAt:
           type: string
         updatedAt:
@@ -1139,11 +1145,12 @@ components:
 
     DemandInput:
       type: object
-      required: [title, description, categoryId, neighborhoodId, address, lat, lng]
+      required: [description, categoryId, neighborhoodId, address, lat, lng]
       properties:
         title:
           type: string
           minLength: 5
+          description: 'Opcional. Sem título, o servidor gera "[Categoria] em [Bairro] — [Endereço curto]"'
         description:
           type: string
           minLength: 10
@@ -1159,6 +1166,9 @@ components:
           type: number
         photoUrl:
           type: ["string", "null"]
+        isAnonymous:
+          type: boolean
+          description: Manter a identidade anônima (o público vê "Cidadão(a)" como autor)
 
     DemandUpdate:
       type: object

@@ -20,7 +20,12 @@ router.get("/users/:id/profile", optionalAuth, async (req, res) => {
     const viewer = (req as any).currentUser as { id: number; role: string } | null;
     // Demandas pendentes de moderação só aparecem para o próprio autor e para a gestão.
     const recentDemands = await db.select().from(demandsTable)
-      .where(and(eq(demandsTable.authorId, id), visibleTo(viewer)))
+      .where(and(
+        eq(demandsTable.authorId, id),
+        visibleTo(viewer),
+        // Demandas anônimas não podem levar ao perfil de quem as fez: só o próprio autor as vê aqui.
+        viewer?.id === id ? undefined : eq(demandsTable.isAnonymous, false),
+      ))
       .orderBy(desc(demandsTable.createdAt)).limit(5);
     const shownName = viewer?.id === id ? user.name : publicName(user.name);
     const catIds = [...new Set(recentDemands.map(d => d.categoryId))];

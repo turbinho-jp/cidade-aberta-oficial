@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db, demandsTable, usersTable, activityLogTable, categoriesTable, neighborhoodsTable, departmentsTable } from "@workspace/db";
 import { sql, desc, eq, or, isNull, and, gte, lt } from "drizzle-orm";
 import { parseQuery, sendValidationError, paginationFields, int, optional, type Field } from "../lib/validate";
-import { publicName } from "../lib/public-name";
+import { publicName, demandAuthorName } from "../lib/public-name";
 
 const router = Router();
 
@@ -147,7 +147,7 @@ router.get("/dashboard/top-demands", async (req, res) => {
       categoryId: d.categoryId, neighborhoodId: d.neighborhoodId,
       address: d.address, lat: d.lat, lng: d.lng, photoUrl: d.photoUrl,
       confirmationsCount: d.confirmationsCount, commentsCount: d.commentsCount,
-      isConfirmedByMe: false, authorId: d.authorId, authorName: publicName(d.authorName),
+      isConfirmedByMe: false, authorId: d.isAnonymous ? 0 : d.authorId, authorName: demandAuthorName(d), isAnonymous: d.isAnonymous,
       publicResponse: d.publicResponse, createdAt: d.createdAt.toISOString(), updatedAt: d.updatedAt.toISOString(),
     })));
   } catch (err) {

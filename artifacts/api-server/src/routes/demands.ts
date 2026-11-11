@@ -6,14 +6,15 @@ import { logActivity } from "../lib/activity";
 import { notifyDemandAuthor, NOTIFIABLE_STATUSES } from "../lib/notify";
 import type { StatusEmailKind } from "../lib/mailer";
 import { awardPoints, revokePoints, POINTS, resolutionValidationKeys } from "../lib/gamification";
-import { isManager as isStaff, visibleTo, canSee } from "../lib/visibility";
-import { publicName, publicNameOrNull } from "../lib/public-name";
+import { isManager as isStaff, visibleTo, canSee, type Viewer } from "../lib/visibility";
+import { publicNameOrNull, demandAuthorName, ANONYMOUS_NAME } from "../lib/public-name";
+import { buildAutoTitle } from "../lib/demand-title";
 import { syncNeighborhoodCounters, syncDepartmentCounters, type Tx } from "../lib/counters";
 import { loadAttachmentMeta, type AttachmentMeta } from "./attachments";
 import { serviceAreaLat, serviceAreaLng } from "../lib/geo";
 import {
   parseBody, parseQuery, parseId, sendValidationError, paginationFields, escapeLike,
-  text, int, oneOf, optional, nullable, httpUrl,
+  text, int, oneOf, optional, nullable, httpUrl, bool,
 } from "../lib/validate";
 
 const router = Router();
@@ -32,7 +33,9 @@ async function creditPublication(tx: Tx, d: { id: number; neighborhoodId: number
   await awardPoints(tx, { userId: d.authorId, amount: POINTS.DEMAND_PUBLISHED, reason: "demand_published", dedupeKey: `demand_published:${d.id}`, demandId: d.id });
 }
 
-function formatDemand(d: any, category?: any, neighborhood?: any, department?: any, isConfirmedByMe = false, attachments: AttachmentMeta[] = []) {
+function formatDemand(d: any, category?: any, neighborhood?: any, department?: any, isConfirmedByMe = false, attachments: AttachmentMeta[] = [], viewer?: Viewer) {
+  // Demanda anônima: o público nunca recebe o id do autor (daria para abrir o perfil dele). Só o próprio autor e a gestão.
+  const showAuthorId = !d.isAnonymous || (!!viewer && (viewer.id === d.authorId || isStaff(viewer)));
   return {
     id: d.id,
     title: d.title,
@@ -53,8 +56,9 @@ function formatDemand(d: any, category?: any, neighborhood?: any, department?: a
     confirmationsCount: d.confirmationsCount,
     commentsCount: d.commentsCount,
     isConfirmedByMe,
-    authorId: d.authorId,
-    authorName: publicName(d.authorName),
+    authorId: showAuthorId ? d.authorId : 0,
+    authorName: demandAuthorName(d),
+    isAnonymous: !!d.isAnonymous,
     publicResponse: d.publicResponse,
     isApproved: d.isApproved,
     createdAt: d.createdAt.toISOString(),
@@ -113,7 +117,7 @@ router.get("/demands", optionalAuth, async (req, res) => {
     const nbrMap = Object.fromEntries(neighborhoods.map(n => [n.id, n]));
 
     res.json({
-      demands: demands.map(d => formatDemand(d, catMap[d.categoryId], nbrMap[d.neighborhoodId], undefined, confirmedIds.has(d.id), attachmentsByDemand.get(d.id))),
+      demands: demands.map(d => formatDemand(d, catMap[d.categoryId], nbrMap[d.neighborhoodId], undefined, confirmedIds.has(d.id), attachmentsByDemand.get(d.id), currentUser)),
       total: count,
     });
   } catch (err) {
@@ -141,7 +145,7 @@ router.get("/demands/pending", requireAdmin, async (req, res) => {
     const nbrMap = Object.fromEntries(neighborhoods.map(n => [n.id, n]));
 
     res.json({
-      demands: demands.map(d => formatDemand(d, catMap[d.categoryId], nbrMap[d.neighborhoodId], undefined, false, attachmentsByDemand.get(d.id))),
+      demands: demands.map(d => formatDemand(d, catMap[d.categoryId], nbrMap[d.neighborhoodId], undefined, false, attachmentsByDemand.get(d.id), (req as any).currentUser)),
       total: demands.length,
     });
   } catch (err) {
@@ -154,7 +158,8 @@ router.post("/demands", requireAuth, async (req, res) => {
   try {
     const currentUser = (req as any).currentUser;
     const body = parseBody(req.body, {
-      title: text({ min: 5, max: 150 }),
+      // Sem título (ou em branco), o servidor monta "[Categoria] em [Bairro] — [Endereço curto]".
+      title: optional(text({ min: 5, max: 150 }), { blankAsMissing: true }),
       description: text({ min: 10, max: 5000 }),
       categoryId: int(),
       neighborhoodId: int(),
@@ -162,16 +167,20 @@ router.post("/demands", requireAuth, async (req, res) => {
       lat: serviceAreaLat(),
       lng: serviceAreaLng(),
       photoUrl: optional(httpUrl(), { blankAsMissing: true }),
+      isAnonymous: optional(bool()),
     });
     if (!body.ok) return sendValidationError(res, body.errors);
-    const { title, description, categoryId, neighborhoodId, address, lat, lng, photoUrl } = body.value;
+    const { title: givenTitle, description, categoryId, neighborhoodId, address, lat, lng, photoUrl } = body.value;
+    const isAnonymous = body.value.isAnonymous === true;
 
     const [[category], [neighborhood]] = await Promise.all([
-      db.select({ id: categoriesTable.id }).from(categoriesTable).where(eq(categoriesTable.id, categoryId)).limit(1),
+      db.select({ id: categoriesTable.id, name: categoriesTable.name }).from(categoriesTable).where(eq(categoriesTable.id, categoryId)).limit(1),
       db.select().from(neighborhoodsTable).where(eq(neighborhoodsTable.id, neighborhoodId)).limit(1),
     ]);
     if (!category) return sendValidationError(res, { categoryId: "categoria não encontrada" });
     if (!neighborhood) return sendValidationError(res, { neighborhoodId: "bairro não encontrado" });
+    const title = givenTitle ?? buildAutoTitle(category.name, neighborhood.name, address);
+    const authorLabel = isAnonymous ? ANONYMOUS_NAME : currentUser.name;
 
     // Equipe publica direto; cidadão entra na fila de moderação.
     const autoApproved = isStaff(currentUser);
@@ -183,6 +192,7 @@ router.post("/demands", requireAuth, async (req, res) => {
         photoUrl: photoUrl || null,
         authorId: currentUser.id,
         authorName: currentUser.name,
+        isAnonymous,
         status: "open",
         isApproved: autoApproved,
       }).returning();
@@ -190,15 +200,15 @@ router.post("/demands", requireAuth, async (req, res) => {
       // Contadores públicos (bairro, categoria) e pontos só contam demanda PUBLICADA: para
       // cidadão isso acontece na aprovação (PATCH /demands/:id/approve), não aqui.
       if (autoApproved) await creditPublication(tx, created);
-      await tx.insert(timelineTable).values({ demandId: created.id, event: "Demanda criada", description: "Demanda registrada pelo cidadão", actorName: currentUser.name, actorRole: "citizen", statusTo: "open" });
+      await tx.insert(timelineTable).values({ demandId: created.id, event: "Demanda criada", description: "Demanda registrada pelo cidadão", actorName: authorLabel, actorRole: "citizen", statusTo: "open" });
       return created;
     });
     // O log de atividade (feed público) só sai quando a demanda é publicada.
     if (autoApproved) {
-      await logActivity({ type: "demand_created", description: `Nova demanda: ${title}`, demandId: demand.id, demandTitle: title, actorName: currentUser.name, neighborhoodName: neighborhood?.name });
+      await logActivity({ type: "demand_created", description: `Nova demanda: ${title}`, demandId: demand.id, demandTitle: title, actorName: authorLabel, neighborhoodName: neighborhood?.name });
     }
 
-    res.status(201).json(formatDemand(demand));
+    res.status(201).json(formatDemand(demand, undefined, undefined, undefined, false, [], currentUser));
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
@@ -242,7 +252,7 @@ router.get("/demands/:id", optionalAuth, async (req, res) => {
     const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
 
     res.json({
-      ...formatDemand(demand, categories[0], neighborhoods[0], departments[0], isConfirmedByMe, attachmentsByDemand.get(id)),
+      ...formatDemand(demand, categories[0], neighborhoods[0], departments[0], isConfirmedByMe, attachmentsByDemand.get(id), currentUser),
       validationsCount, isResolutionValidatedByMe,
       timeline: timeline.map(t => ({
         id: t.id, demandId: t.demandId, event: t.event, description: t.description,
@@ -304,7 +314,7 @@ router.patch("/demands/:id", requireAdmin, async (req, res) => {
       return updated;
     });
     if (!demand) { res.status(404).json({ error: "Not found" }); return; }
-    res.json(formatDemand(demand));
+    res.json(formatDemand(demand, undefined, undefined, undefined, false, [], (req as any).currentUser));
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
@@ -337,13 +347,13 @@ router.patch("/demands/:id/approve", requireAdmin, async (req, res) => {
       await logActivity({
         type: "demand_created", description: `Nova demanda: ${result.existing.title}`,
         demandId: id, demandTitle: result.existing.title,
-        actorName: result.existing.authorName, neighborhoodName: neighborhood?.name,
+        actorName: result.existing.isAnonymous ? ANONYMOUS_NAME : result.existing.authorName, neighborhoodName: neighborhood?.name,
       });
       // Falha de e-mail só vai pro log (notifyDemandAuthor nunca lança).
       await notifyDemandAuthor({ id, title: result.existing.title, authorId: result.existing.authorId }, "published");
     }
 
-    res.json(formatDemand(result.demand));
+    res.json(formatDemand(result.demand, undefined, undefined, undefined, false, [], currentUser));
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
@@ -449,7 +459,7 @@ router.patch("/demands/:id/status", requireAdmin, async (req, res) => {
       );
     }
 
-    res.json(formatDemand(demand));
+    res.json(formatDemand(demand, undefined, undefined, undefined, false, [], currentUser));
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });

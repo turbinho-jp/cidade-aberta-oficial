@@ -39,6 +39,8 @@ export interface Demand {
   publicResponse?: string | null;
   /** false enquanto a demanda aguarda moderação (só autor e gestão a veem) */
   isApproved?: boolean;
+  /** true quando o autor pediu anonimato (o público vê "Cidadão(a)") */
+  isAnonymous?: boolean;
   createdAt: string;
   updatedAt?: string;
 }

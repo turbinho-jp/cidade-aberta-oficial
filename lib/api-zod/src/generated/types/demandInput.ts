@@ -7,8 +7,11 @@
  */
 
 export interface DemandInput {
-  /** @minLength 5 */
-  title: string;
+  /**
+   * Opcional. Sem título, o servidor gera "[Categoria] em [Bairro] — [Endereço curto]"
+   * @minLength 5
+   */
+  title?: string;
   /** @minLength 10 */
   description: string;
   categoryId: number;
@@ -18,4 +21,6 @@ export interface DemandInput {
   lng: number;
   /** @nullable */
   photoUrl?: string | null;
+  /** Manter a identidade anônima (o público vê "Cidadão(a)" como autor) */
+  isAnonymous?: boolean;
 }

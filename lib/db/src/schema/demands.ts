@@ -32,6 +32,8 @@ export const demandsTable = pgTable("demands", {
   authorName: text("author_name").notNull(),
   publicResponse: text("public_response"),
   isApproved: boolean("is_approved").notNull().default(true),
+  // Autor quis ficar anônimo: o público vê "Cidadão(a)" (ver artifacts/api-server/src/lib/public-name.ts).
+  isAnonymous: boolean("is_anonymous").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [

@@ -7,6 +7,7 @@ import { logActivity } from "../lib/activity";
 import { canSee } from "../lib/visibility";
 import { awardPoints, revokePoints, countActive, POINTS, SUPPORT_RECEIVED_CAP } from "../lib/gamification";
 
+import { actorNameFor } from "../lib/public-name";
 const router = Router();
 
 router.post("/demands/:id/confirm", requireAuth, requireVerifiedEmail, async (req, res) => {
@@ -58,7 +59,7 @@ router.post("/demands/:id/confirm", requireAuth, requireVerifiedEmail, async (re
     // Fora da transação: logActivity usa outra conexão e só enxerga dados já confirmados.
     // O feed é público: não registra atividade de demanda ainda não aprovada.
     if (result.created && result.demand?.isApproved) {
-      await logActivity({ type: "confirmation_added", description: `Nova confirmação em: ${result.demand?.title}`, demandId, demandTitle: result.demand?.title, actorName: currentUser.name });
+      await logActivity({ type: "confirmation_added", description: `Nova confirmação em: ${result.demand?.title}`, demandId, demandTitle: result.demand?.title, actorName: actorNameFor(currentUser, result.demand) });
     }
     res.json({ confirmed: true, total: result.demand?.confirmationsCount ?? 0 });
   } catch (err) {

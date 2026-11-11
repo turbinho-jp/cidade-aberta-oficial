@@ -20,3 +20,22 @@ export function publicName(name: string | null | undefined): string {
 export function publicNameOrNull(name: string | null | undefined): string | null {
   return name ? publicName(name) : null;
 }
+
+/** Como o público vê quem pediu anonimato. É uma palavra só, então `publicName` não a abrevia. */
+export const ANONYMOUS_NAME = "Cidadão(a)";
+
+/** Autor exibido de uma demanda: "Cidadão(a)" se anônima, senão o nome abreviado. */
+export function demandAuthorName(d: { authorName: string | null | undefined; isAnonymous?: boolean | null }): string {
+  return d.isAnonymous ? ANONYMOUS_NAME : publicName(d.authorName);
+}
+
+/**
+ * Nome a gravar no feed/linha do tempo quando `user` age numa demanda: se for o autor de uma
+ * demanda anônima, continua anônimo (senão o feed ligaria "Maria S." à demanda "anônima").
+ */
+export function actorNameFor(
+  user: { id: number; name: string },
+  demand: { authorId: number; isAnonymous?: boolean | null } | null | undefined,
+): string {
+  return demand?.isAnonymous && demand.authorId === user.id ? ANONYMOUS_NAME : user.name;
+}

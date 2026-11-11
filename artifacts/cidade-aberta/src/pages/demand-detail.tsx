@@ -215,6 +215,9 @@ export default function DemandDetail() {
                     <AvatarFallback className="text-[10px]">{demand.authorName?.substring(0,2).toUpperCase()}</AvatarFallback>
                   </Avatar>
                   <span>Por <strong>{demand.authorName}</strong></span>
+                  {demand.isAnonymous && user?.id === demand.authorId && (
+                    <span className="text-xs">(anônima para o público)</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Calendar className="w-4 h-4" />

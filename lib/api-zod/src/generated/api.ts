@@ -153,6 +153,7 @@ export const ListDemandsResponse = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })),
@@ -170,14 +171,15 @@ export const createDemandBodyDescriptionMin = 10;
 
 
 export const CreateDemandBody = zod.object({
-  "title": zod.string().min(createDemandBodyTitleMin),
+  "title": zod.string().min(createDemandBodyTitleMin).optional().describe('Opcional. Sem título, o servidor gera "[Categoria] em [Bairro] — [Endereço curto]"'),
   "description": zod.string().min(createDemandBodyDescriptionMin),
   "categoryId": zod.number(),
   "neighborhoodId": zod.number(),
   "address": zod.string(),
   "lat": zod.number(),
   "lng": zod.number(),
-  "photoUrl": zod.string().nullish()
+  "photoUrl": zod.string().nullish(),
+  "isAnonymous": zod.boolean().optional().describe('Manter a identidade anônima (o público vê "Cidadão(a)" como autor)')
 })
 
 
@@ -240,6 +242,7 @@ export const GetDemandResponse = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional(),
   "timeline": zod.array(zod.object({
@@ -297,6 +300,7 @@ export const GetDemandResponse = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 }).optional(),
@@ -378,6 +382,7 @@ export const UpdateDemandResponse = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })
@@ -458,6 +463,7 @@ export const UpdateDemandStatusResponse = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })
@@ -640,6 +646,7 @@ export const ListServiceOrdersResponseItem = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 }).optional(),
@@ -730,6 +737,7 @@ export const GetServiceOrderResponse = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 }).optional(),
@@ -812,6 +820,7 @@ export const UpdateServiceOrderResponse = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 }).optional(),
@@ -932,6 +941,7 @@ export const GetDepartmentStatsResponse = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })).optional()
@@ -1151,6 +1161,7 @@ export const GetTopDemandsResponseItem = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })
@@ -1214,6 +1225,7 @@ export const GetUserProfileResponse = zod.object({
   "authorName": zod.string().optional(),
   "publicResponse": zod.string().nullish(),
   "isApproved": zod.boolean().optional().describe('false enquanto a demanda aguarda moderação (só autor e gestão a veem)'),
+  "isAnonymous": zod.boolean().optional().describe('true quando o autor pediu anonimato (o público vê "Cidadão(a)")'),
   "createdAt": zod.string(),
   "updatedAt": zod.string().optional()
 })).optional(),

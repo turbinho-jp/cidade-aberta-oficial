@@ -157,6 +157,8 @@ export interface Demand {
   publicResponse?: string | null;
   /** false enquanto a demanda aguarda moderação (só autor e gestão a veem) */
   isApproved?: boolean;
+  /** true quando o autor pediu anonimato (o público vê "Cidadão(a)") */
+  isAnonymous?: boolean;
   createdAt: string;
   updatedAt?: string;
 }
@@ -306,6 +308,8 @@ export interface DemandDetail {
   publicResponse?: string | null;
   /** false enquanto a demanda aguarda moderação (só autor e gestão a veem) */
   isApproved?: boolean;
+  /** true quando o autor pediu anonimato (o público vê "Cidadão(a)") */
+  isAnonymous?: boolean;
   createdAt: string;
   updatedAt?: string;
   timeline: TimelineEvent[];
@@ -318,8 +322,11 @@ export interface DemandListResponse {
 }
 
 export interface DemandInput {
-  /** @minLength 5 */
-  title: string;
+  /**
+   * Opcional. Sem título, o servidor gera "[Categoria] em [Bairro] — [Endereço curto]"
+   * @minLength 5
+   */
+  title?: string;
   /** @minLength 10 */
   description: string;
   categoryId: number;
@@ -329,6 +336,8 @@ export interface DemandInput {
   lng: number;
   /** @nullable */
   photoUrl?: string | null;
+  /** Manter a identidade anônima (o público vê "Cidadão(a)" como autor) */
+  isAnonymous?: boolean;
 }
 
 export interface DemandUpdate {

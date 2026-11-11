@@ -3,6 +3,7 @@ import { db, departmentsTable, demandsTable, categoriesTable, neighborhoodsTable
 import { eq, desc, inArray } from "drizzle-orm";
 import { parseId, sendValidationError } from "../lib/validate";
 
+import { demandAuthorName } from "../lib/public-name";
 const router = Router();
 
 router.get("/departments", async (req, res) => {
@@ -51,7 +52,7 @@ router.get("/departments/:id/stats", async (req, res) => {
         neighborhoodId: d.neighborhoodId, neighborhood: nbrMap[d.neighborhoodId],
         address: d.address, lat: d.lat, lng: d.lng,
         confirmationsCount: d.confirmationsCount, commentsCount: d.commentsCount,
-        authorId: d.authorId, authorName: d.authorName, publicResponse: d.publicResponse,
+        authorId: d.isAnonymous ? 0 : d.authorId, authorName: demandAuthorName(d), isAnonymous: d.isAnonymous, publicResponse: d.publicResponse,
         createdAt: d.createdAt.toISOString(), updatedAt: d.updatedAt.toISOString(),
       })),
     });

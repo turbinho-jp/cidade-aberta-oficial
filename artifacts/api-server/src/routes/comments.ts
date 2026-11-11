@@ -3,7 +3,7 @@ import { db, commentsTable, demandsTable, usersTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { requireAuth, requireVerifiedEmail, optionalAuth, isStaff } from "../lib/auth";
 import { canSee } from "../lib/visibility";
-import { publicName } from "../lib/public-name";
+import { publicName, ANONYMOUS_NAME, actorNameFor } from "../lib/public-name";
 import { parseBody, parseId, sendValidationError, text } from "../lib/validate";
 import { logActivity } from "../lib/activity";
 import { awardPoints, revokePoints, countActive, POINTS, COMMENTS_PER_DEMAND_CAP } from "../lib/gamification";
@@ -15,15 +15,20 @@ router.get("/demands/:id/comments", optionalAuth, async (req, res) => {
     const id = parseId(req.params.id);
     if (id === null) return sendValidationError(res, { id: "id inválido" });
     // Demanda pendente de moderação: comentários só para o autor e a gestão.
-    const [parent] = await db.select({ isApproved: demandsTable.isApproved, authorId: demandsTable.authorId })
+    const [parent] = await db.select({ isApproved: demandsTable.isApproved, authorId: demandsTable.authorId, isAnonymous: demandsTable.isAnonymous })
       .from(demandsTable).where(eq(demandsTable.id, id)).limit(1);
     if (!parent || !canSee((req as any).currentUser, parent)) { res.json([]); return; }
     const comments = await db.select().from(commentsTable)
       .where(and(eq(commentsTable.demandId, id), eq(commentsTable.isModerated, false)))
       .orderBy(commentsTable.createdAt);
+    const viewer = (req as any).currentUser as { id: number } | null;
+    // O autor de uma demanda anônima que comenta nela continua anônimo para os outros (só ele se vê).
+    const hidden = (c: { authorId: number; isOfficial: boolean }) =>
+      parent.isAnonymous && !c.isOfficial && c.authorId === parent.authorId && viewer?.id !== c.authorId;
     res.json(comments.map(c => ({
-      id: c.id, demandId: c.demandId, content: c.content, authorId: c.authorId,
-      authorName: c.isOfficial ? c.authorName : publicName(c.authorName), authorAvatarUrl: c.authorAvatarUrl,
+      id: c.id, demandId: c.demandId, content: c.content, authorId: hidden(c) ? 0 : c.authorId,
+      authorName: hidden(c) ? ANONYMOUS_NAME : c.isOfficial ? c.authorName : publicName(c.authorName),
+      authorAvatarUrl: hidden(c) ? null : c.authorAvatarUrl,
       isModerated: c.isModerated, isOfficial: c.isOfficial, createdAt: c.createdAt.toISOString(),
     })));
   } catch (err) {
@@ -61,7 +66,7 @@ router.post("/demands/:id/comments", requireAuth, requireVerifiedEmail, async (r
       return created;
     });
     // O feed é público: atividade em demanda ainda não aprovada não pode vazar o título dela.
-    if (demand.isApproved) await logActivity({ type: "comment_added", description: `Novo comentário em: ${demand.title}`, demandId, demandTitle: demand.title, actorName: currentUser.name });
+    if (demand.isApproved) await logActivity({ type: "comment_added", description: `Novo comentário em: ${demand.title}`, demandId, demandTitle: demand.title, actorName: actorNameFor(currentUser, demand) });
 
     res.status(201).json({
       id: comment.id, demandId: comment.demandId, content: comment.content,

@@ -99,6 +99,16 @@ export function oneOf<const T extends readonly string[]>(values: T): Field<T[num
   };
 }
 
+/** Booleano de verdade (true/false). Strings e números são rejeitados. */
+export function bool(): Field<boolean> {
+  return {
+    optional: false,
+    parse(value) {
+      return typeof value === "boolean" ? ok(value) : fail("deve ser verdadeiro ou falso");
+    },
+  };
+}
+
 /** Data/hora ISO. Devolve um objeto Date. */
 export function isoDate(): Field<Date> {
   return {
