@@ -82,3 +82,56 @@ export async function sendVerificationEmail(to: string, name: string, token: str
     return false;
   }
 }
+
+const STATUS_EMAIL: Record<string, { subject: string; headline: string }> = {
+  approved: { subject: "foi aprovada", headline: "Sua demanda foi aprovada e já está em análise pela prefeitura." },
+  in_progress: { subject: "está em andamento", headline: "Boa notícia: a prefeitura começou a atuar na sua demanda." },
+  completed: { subject: "foi marcada como resolvida", headline: "Sua demanda foi marcada como resolvida. Confira e confirme se o problema realmente acabou." },
+  rejected: { subject: "não pôde ser atendida", headline: "Sua demanda não pôde ser aceita. Veja o motivo na página dela." },
+  closed: { subject: "foi encerrada", headline: "Sua demanda foi encerrada." },
+};
+
+/** Status que geram aviso ao autor. Os demais (open, under_review) são internos e não notificam. */
+export const NOTIFIABLE_STATUSES = Object.keys(STATUS_EMAIL);
+
+/** Avisa o autor que a demanda mudou de status. Nunca lança; devolve true se o SMTP aceitou. */
+export async function sendDemandStatusEmail(
+  to: string,
+  name: string,
+  demand: { id: number; title: string },
+  status: string,
+  note?: string | null,
+): Promise<boolean> {
+  const copy = STATUS_EMAIL[status];
+  const t = getTransporter();
+  const base = appUrl();
+  if (!copy || !t || !base) {
+    if (copy) logger.warn({ hasSmtp: !!t, hasAppUrl: !!base }, "Aviso de status não enviado: SMTP_* ou APP_URL não configurados");
+    return false;
+  }
+  const link = `${base}/demandas/${demand.id}`;
+  const from = process.env["MAIL_FROM"] || process.env["SMTP_USER"];
+  const first = name.split(/\s+/)[0] || "";
+  const title = escapeHtml(demand.title);
+  const noteText = note?.trim();
+  try {
+    await t.sendMail({
+      from,
+      to,
+      subject: `Sua demanda ${copy.subject}: ${demand.title}`.slice(0, 200),
+      text:
+        `Olá, ${first}!\n\n${copy.headline}\n\n"${demand.title}"\n` +
+        (noteText ? `\nMensagem da prefeitura: ${noteText}\n` : "") +
+        `\nAcompanhe aqui: ${link}\n`,
+      html:
+        `<p>Olá, ${escapeHtml(first)}!</p><p>${escapeHtml(copy.headline)}</p>` +
+        `<p style="font-weight:600">“${title}”</p>` +
+        (noteText ? `<p style="border-left:3px solid #0f766e;padding-left:10px;color:#333">${escapeHtml(noteText)}</p>` : "") +
+        `<p><a href="${link}" style="display:inline-block;padding:12px 20px;background:#0f766e;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Acompanhar minha demanda</a></p>`,
+    });
+    return true;
+  } catch (err) {
+    logger.error({ err }, "Falha ao enviar o aviso de status");
+    return false;
+  }
+}

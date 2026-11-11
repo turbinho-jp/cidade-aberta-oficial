@@ -16,12 +16,14 @@ import { coverUrl, uploadAttachment } from "@/lib/attachments";
 import { MAX_PHOTOS } from "@/lib/image-compress";
 import { StatusBadge, isPendingModeration } from "@/components/status-badge";
 import { CategoryIcon } from "@/components/category-icon";
+import { ShareDemand } from "@/components/share-demand";
+import { SlaNotice } from "@/components/sla-notice";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MapPin, ThumbsUp, Calendar, AlertCircle, HardHat, FileText, CheckCircle2, Clock, Send, ShieldAlert, Share2 } from "lucide-react";
+import { MapPin, ThumbsUp, Calendar, AlertCircle, HardHat, FileText, CheckCircle2, Clock, Send, ShieldAlert } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -77,26 +79,6 @@ export default function DemandDetail() {
       queryClient.invalidateQueries({ queryKey: getGetDemandQueryKey(demandId) });
     } catch {
       toast({ title: "Não foi possível apagar a foto", variant: "destructive" });
-    }
-  };
-
-  const handleShare = async () => {
-    const url = window.location.href;
-    const title = demand?.title ?? "Demanda";
-    const text = `${title} - veja e apoie essa demanda no Cidade Aberta`;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title, text, url });
-      } catch {
-        // usuário cancelou
-      }
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(url);
-      toast({ title: "Link copiado", description: "Cole onde quiser compartilhar." });
-    } catch {
-      toast({ title: "Não foi possível copiar", description: url });
     }
   };
 
@@ -222,6 +204,10 @@ export default function DemandDetail() {
               <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-4 text-foreground">
                 {demand.title}
               </h1>
+
+              {!["completed", "closed", "rejected"].includes(demand.status) && (
+                <SlaNotice categoryName={demand.category?.name} className="mb-4" />
+              )}
 
               <div className="flex flex-wrap gap-4 text-sm text-muted-foreground mb-8 pb-6 border-b">
                 <div className="flex items-center gap-1.5">
@@ -405,10 +391,7 @@ export default function DemandDetail() {
                   </div>
                 )}
 
-                <Button type="button" variant="outline" size="lg" className="w-full mt-3 font-semibold" onClick={handleShare}>
-                  <Share2 className="w-5 h-5 mr-2" />
-                  Compartilhar
-                </Button>
+                <ShareDemand id={demand.id} title={demand.title} />
               </CardContent>
             </Card>
 

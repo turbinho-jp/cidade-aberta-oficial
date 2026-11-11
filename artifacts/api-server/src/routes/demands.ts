@@ -3,6 +3,7 @@ import { db, demandsTable, categoriesTable, neighborhoodsTable, departmentsTable
 import { eq, and, or, sql, ilike, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireAdmin, optionalAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
+import { sendDemandStatusEmail, NOTIFIABLE_STATUSES } from "../lib/mailer";
 import { awardPoints, revokePoints, POINTS, resolutionValidationKeys } from "../lib/gamification";
 import { isManager as isStaff, visibleTo, canSee } from "../lib/visibility";
 import { publicName, publicNameOrNull } from "../lib/public-name";
@@ -337,6 +338,15 @@ router.patch("/demands/:id/approve", requireAdmin, async (req, res) => {
         demandId: id, demandTitle: result.existing.title,
         actorName: result.existing.authorName, neighborhoodName: neighborhood?.name,
       });
+      try {
+        const [author] = await db.select({ email: usersTable.email, name: usersTable.name, verified: usersTable.emailVerifiedAt })
+          .from(usersTable).where(eq(usersTable.id, result.existing.authorId)).limit(1);
+        if (author?.verified && author.email) {
+          await sendDemandStatusEmail(author.email, author.name, { id, title: result.existing.title }, "approved");
+        }
+      } catch (mailErr) {
+        req.log.error(mailErr);
+      }
     }
 
     res.json(formatDemand(result.demand));
@@ -432,6 +442,20 @@ router.patch("/demands/:id/status", requireAdmin, async (req, res) => {
       await logActivity({ type: "demand_resolved", description: `Demanda resolvida: ${existing.title}`, demandId: id, demandTitle: existing.title, actorName: currentUser.name, neighborhoodName });
     } else {
       await logActivity({ type: "status_changed", description: `Status atualizado para ${status}: ${existing.title}`, demandId: id, demandTitle: existing.title, actorName: currentUser.name, neighborhoodName });
+    }
+
+    // Avisa o autor por e-mail (só se a mudança foi real, a demanda já é pública e o e-mail foi verificado).
+    // Falha de SMTP nunca derruba a rota: o status já foi salvo.
+    if (existing.status !== status && existing.isApproved && NOTIFIABLE_STATUSES.includes(status)) {
+      try {
+        const [author] = await db.select({ email: usersTable.email, name: usersTable.name, verified: usersTable.emailVerifiedAt })
+          .from(usersTable).where(eq(usersTable.id, existing.authorId)).limit(1);
+        if (author?.verified && author.email) {
+          await sendDemandStatusEmail(author.email, author.name, { id, title: existing.title }, status, publicResponse || note);
+        }
+      } catch (mailErr) {
+        req.log.error(mailErr);
+      }
     }
 
     res.json(formatDemand(demand));

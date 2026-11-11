@@ -18,6 +18,7 @@ import { LocationPicker } from "@/components/location-picker";
 import { PhotoPicker, type PickedPhoto } from "@/components/photo-picker";
 import { uploadAttachment } from "@/lib/attachments";
 import { SERVICE_AREA } from "@/lib/geo";
+import { SlaNotice } from "@/components/sla-notice";
 
 const LOCATION_REQUIRED = "Marque o local do problema no mapa";
 const OUT_OF_AREA = "O local deve estar na área de atendimento (João Pessoa e região)";
@@ -268,6 +269,7 @@ export default function DemandCreate() {
                           ))}
                         </SelectContent>
                       </Select>
+                      <SlaNotice categoryName={categories?.find((c) => c.id === Number(field.value))?.name} />
                       <FormMessage />
                     </FormItem>
                   )}
