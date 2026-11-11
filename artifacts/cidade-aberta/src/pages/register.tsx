@@ -67,10 +67,11 @@ export default function Register() {
                 name="name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="font-semibold">Nome Completo</FormLabel>
+                    <FormLabel className="font-semibold">Nome ou apelido</FormLabel>
                     <FormControl>
-                      <Input placeholder="João da Silva" {...field} className="bg-background" />
+                      <Input placeholder="Ex.: Maria Souza" {...field} className="bg-background" />
                     </FormControl>
+                    <p className="text-xs text-muted-foreground">Em demandas e comentários, seu nome aparece abreviado (ex.: Maria S.).</p>
                     <FormMessage />
                   </FormItem>
                 )}

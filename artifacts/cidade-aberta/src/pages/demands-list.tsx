@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 import { useListDemands, useListCategories, useListNeighborhoods } from "@workspace/api-client-react";
 import { Layout } from "@/components/layout";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,8 @@ import { useAuth } from "@/lib/auth";
 
 export default function DemandsList() {
   const { isAuthenticated } = useAuth();
+  const urlParams = new URLSearchParams(useSearch());
+  const departmentId = urlParams.get("departmentId");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<string>("all");
   const [categoryId, setCategoryId] = useState<string>("all");
@@ -22,6 +24,7 @@ export default function DemandsList() {
     status: status !== "all" ? status : undefined,
     categoryId: categoryId !== "all" ? parseInt(categoryId) : undefined,
     neighborhoodId: neighborhoodId !== "all" ? parseInt(neighborhoodId) : undefined,
+    departmentId: departmentId && !Number.isNaN(parseInt(departmentId)) ? parseInt(departmentId) : undefined,
     limit: 50,
   });
 
@@ -45,6 +48,13 @@ export default function DemandsList() {
           )}
         </div>
 
+        {departmentId && (
+          <div className="mb-4 flex items-center justify-between rounded-lg border bg-primary/5 px-4 py-2 text-sm">
+            <span>Mostrando apenas as demandas de uma secretaria.</span>
+            <Link href="/demandas" className="text-primary font-medium hover:underline">Limpar filtro</Link>
+          </div>
+        )}
+
         <div className="bg-card border rounded-lg p-4 mb-8 flex flex-col md:flex-row gap-4 items-center shadow-sm">
           <div className="relative flex-1 w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -65,6 +75,7 @@ export default function DemandsList() {
                 <SelectItem value="open">Aberto</SelectItem>
                 <SelectItem value="in_progress">Em Andamento</SelectItem>
                 <SelectItem value="completed">Concluído</SelectItem>
+                <SelectItem value="closed">Fechado</SelectItem>
               </SelectContent>
             </Select>
 

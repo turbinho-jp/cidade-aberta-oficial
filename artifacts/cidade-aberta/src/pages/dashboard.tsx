@@ -8,11 +8,15 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { Activity, Users, CheckCircle2, Megaphone, Map as MapIcon, ArrowUpRight, Trophy, Clock } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
+import { ActivityIcon } from "@/components/activity-icon";
+import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
+const FEED_PREVIEW = 8;
 const COLORS = ['#10b981', '#f59e0b', '#06b6d4', '#8b5cf6', '#ef4444', '#f97316', '#3b82f6'];
 
 export default function Dashboard() {
+  const [showAllFeed, setShowAllFeed] = useState(false);
   const { data: summary, isLoading: loadingSummary } = useGetDashboardSummary();
   const { data: byNeighborhood, isLoading: loadingNeighborhoods } = useGetDemandsByNeighborhood();
   const { data: byCategory, isLoading: loadingCategories } = useGetDemandsByCategory();
@@ -77,7 +81,7 @@ export default function Dashboard() {
               {loadingSummary ? <Skeleton className="h-8 w-20" /> : (
                 <>
                   <div className="text-2xl font-bold">{summary?.openDemands || 0}</div>
-                  <p className="text-xs text-muted-foreground mt-1">Aguardando análise</p>
+                  <p className="text-xs text-muted-foreground mt-1">Aguardando atendimento</p>
                 </>
               )}
             </CardContent>
@@ -222,11 +226,9 @@ export default function Dashboard() {
                     ))
                   ) : !recentActivity || recentActivity.length === 0 ? (
                     <p className="text-sm text-muted-foreground pl-8">Ainda sem atividade pública.</p>
-                  ) : recentActivity.map(event => (
+                  ) : (showAllFeed ? recentActivity : recentActivity.slice(0, FEED_PREVIEW)).map(event => (
                     <div key={event.id} className="relative flex gap-4 pl-8">
-                      <div className="absolute left-0 w-6 h-6 rounded-full bg-background border-2 border-primary z-10 flex items-center justify-center">
-                        <div className="w-2 h-2 rounded-full bg-primary" />
-                      </div>
+                      <ActivityIcon type={event.type} />
                       <div>
                         <p className="text-sm">
                           <span className="font-medium text-foreground">{event.actorName || 'Cidadão'}</span>{' '}
@@ -244,6 +246,11 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </div>
+                {recentActivity && recentActivity.length > FEED_PREVIEW && (
+                  <Button variant="ghost" size="sm" className="w-full mt-4" onClick={() => setShowAllFeed(v => !v)}>
+                    {showAllFeed ? "Ver menos" : "Ver mais"}
+                  </Button>
+                )}
               </CardContent>
             </Card>
           </div>

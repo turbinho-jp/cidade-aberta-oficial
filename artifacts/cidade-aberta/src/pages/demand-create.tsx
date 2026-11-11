@@ -23,7 +23,7 @@ const LOCATION_REQUIRED = "Marque o local do problema no mapa";
 const OUT_OF_AREA = "O local deve estar na área de atendimento (João Pessoa e região)";
 
 const demandSchema = z.object({
-  title: z.string().optional(),
+  title: z.string().max(80, "Use no máximo 80 caracteres").optional(),
   description: z.string().optional(),
   categoryId: z.coerce.number().min(1, "Selecione uma categoria"),
   neighborhoodId: z.coerce.number().min(1, "Selecione um bairro"),
@@ -136,7 +136,10 @@ export default function DemandCreate() {
     const neighborhood = neighborhoods?.find((n) => n.id === data.neighborhoodId);
     const categoryName = category?.name ?? "Problema urbano";
 
-    const title = data.title?.trim() || `${categoryName}${neighborhood ? ` - ${neighborhood.name}` : ""}`;
+    const shortAddress = data.address.split(",")[0]?.trim();
+    const title =
+      data.title?.trim() ||
+      `${categoryName}${neighborhood ? ` em ${neighborhood.name}` : ""}${shortAddress ? ` — ${shortAddress}` : ""}`.slice(0, 120);
     const description = data.description?.trim() || `${categoryName} reportado em ${data.address}.`;
 
     const payload = { ...data, title, description };
@@ -192,6 +195,7 @@ export default function DemandCreate() {
             <ul className="list-disc pl-5 space-y-0.5">
               <li>Descreva o problema e o local. Não cite nomes de pessoas.</li>
               <li>Não fotografe rostos, crianças nem placas de veículos.</li>
+              <li>As fotos, o endereço e a descrição ficam públicos. Seu nome aparece abreviado (ex.: Maria S.).</li>
               <li>Toda demanda passa por moderação e só aparece para o público depois de aprovada.</li>
             </ul>
           </div>
@@ -264,6 +268,20 @@ export default function DemandCreate() {
                           ))}
                         </SelectContent>
                       </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="title"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="font-semibold">Título (opcional)</FormLabel>
+                      <FormControl>
+                        <Input maxLength={80} placeholder="Ex.: Poste queimado na esquina da Rua X" className="bg-muted/50" {...field} />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}

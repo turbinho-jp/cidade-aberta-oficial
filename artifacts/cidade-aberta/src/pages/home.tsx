@@ -1,9 +1,10 @@
 import { Link } from "wouter";
-import { ArrowRight, CheckCircle2, Megaphone, Users, Activity, BarChart2 } from "lucide-react";
+import { ArrowRight, CheckCircle2, Megaphone, Users, Activity, BarChart2, MapPin, Eye } from "lucide-react";
 import { useGetDashboardSummary, useGetTopDemands, useGetRecentActivity, useListCategories } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { DemandCard } from "@/components/demand-card";
 import { CategoryIcon } from "@/components/category-icon";
+import { ActivityIcon } from "@/components/activity-icon";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -23,10 +24,10 @@ export default function Home() {
         <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-3xl space-y-6">
             <h1 className="text-5xl md:text-7xl font-bold tracking-tight leading-tight">
-              A cidade que você quer começa com a sua voz.
+              Reporte, apoie e acompanhe os problemas da sua cidade.
             </h1>
             <p className="text-xl md:text-2xl text-primary-foreground/80 max-w-2xl">
-              Reporte problemas, apoie demandas de vizinhos e acompanhe as obras públicas em tempo real. Participe ativamente da melhoria do seu bairro.
+              Você marca o local, a prefeitura responde, você acompanha até resolver.
             </p>
             <div className="flex flex-wrap gap-4 pt-4">
               <Link href="/demandas/nova">
@@ -45,29 +46,51 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Stats Ribbon */}
+      {/* Como funciona */}
       <section className="border-b bg-card">
-        <div className="container mx-auto px-4 py-8">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 divide-x divide-border/50">
+        <div className="container mx-auto px-4 py-10">
+          <h2 className="text-center text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-8">Como funciona</h2>
+          <div className="grid md:grid-cols-3 gap-8">
             {[
-              { label: "Cidadãos Ativos", value: summary?.totalCitizens || 0, icon: Users },
-              { label: "Demandas Abertas", value: summary?.totalDemands || 0, icon: Megaphone },
-              { label: "Problemas Resolvidos", value: summary?.resolvedDemands || 0, icon: CheckCircle2 },
-              { label: "Apoios Registrados", value: summary?.totalConfirmations || 0, icon: Activity },
-            ].map((stat, i) => (
-              <div key={i} className="flex flex-col items-center text-center px-4">
-                <stat.icon className="w-8 h-8 text-primary mb-3 opacity-80" />
-                {loadingSummary ? (
-                  <Skeleton className="h-10 w-24 mb-1" />
-                ) : (
-                  <span className="text-3xl md:text-4xl font-bold text-foreground tracking-tight">{stat.value.toLocaleString('pt-BR')}</span>
-                )}
-                <span className="text-sm font-medium text-muted-foreground uppercase tracking-wider">{stat.label}</span>
+              { icon: MapPin, title: "1. Marque o local", text: "Clique no mapa, escolha a categoria e, se puder, envie uma foto. Leva menos de um minuto." },
+              { icon: Megaphone, title: "2. A prefeitura responde", text: "A demanda passa por uma triagem rápida, é publicada e encaminhada à secretaria responsável." },
+              { icon: Eye, title: "3. Você acompanha", text: "Veja cada mudança de status na linha do tempo, apoie demandas de vizinhos e confirme quando for resolvido." },
+            ].map((step) => (
+              <div key={step.title} className="flex gap-4">
+                <div className="shrink-0 w-12 h-12 rounded-full bg-primary/10 text-primary flex items-center justify-center">
+                  <step.icon className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-semibold">{step.title}</h3>
+                  <p className="text-sm text-muted-foreground mt-1">{step.text}</p>
+                </div>
               </div>
             ))}
           </div>
         </div>
       </section>
+
+      {/* Números: só aparecem quando já existe movimento real, para não mostrar uma fileira de zeros */}
+      {!loadingSummary && (summary?.totalDemands ?? 0) > 0 && (
+        <section className="border-b bg-muted/20">
+          <div className="container mx-auto px-4 py-8">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-8 divide-x divide-border/50">
+              {[
+                { label: "Cidadãos Ativos", value: summary?.totalCitizens || 0, icon: Users },
+                { label: "Demandas Registradas", value: summary?.totalDemands || 0, icon: Megaphone },
+                { label: "Problemas Resolvidos", value: summary?.resolvedDemands || 0, icon: CheckCircle2 },
+                { label: "Apoios Registrados", value: summary?.totalConfirmations || 0, icon: Activity },
+              ].map((stat, i) => (
+                <div key={i} className="flex flex-col items-center text-center px-4">
+                  <stat.icon className="w-8 h-8 text-primary mb-3 opacity-80" />
+                  <span className="text-3xl md:text-4xl font-bold text-foreground tracking-tight">{stat.value.toLocaleString('pt-BR')}</span>
+                  <span className="text-sm font-medium text-muted-foreground uppercase tracking-wider">{stat.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       <div className="container mx-auto px-4 py-16 grid grid-cols-1 lg:grid-cols-3 gap-12">
         {/* Main Content - Left Column */}
@@ -98,7 +121,9 @@ export default function Home() {
               ) : (
                 <div className="col-span-2 text-center py-12 bg-muted/20 rounded-xl border border-dashed">
                   <Megaphone className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                  <p className="text-muted-foreground">Nenhuma demanda registrada ainda.</p>
+                  <p className="font-medium">Ainda não há demandas publicadas.</p>
+                  <p className="text-muted-foreground text-sm mt-1 mb-4">Seja a primeira pessoa a reportar um problema no seu bairro.</p>
+                  <Link href="/demandas/nova"><Button>Reportar o primeiro problema</Button></Link>
                 </div>
               )}
             </div>
@@ -147,9 +172,7 @@ export default function Home() {
               ) : recentActivity?.length ? (
                 recentActivity.map(event => (
                   <div key={event.id} className="relative flex gap-4 pl-10">
-                    <div className="absolute left-0 w-6 h-6 rounded-full bg-background border-2 border-primary z-10 flex items-center justify-center">
-                      <div className="w-2 h-2 rounded-full bg-primary" />
-                    </div>
+                    <ActivityIcon type={event.type} />
                     <div>
                       <p className="text-sm">
                         <span className="font-medium text-foreground">{event.actorName || 'Cidadão'}</span>{' '}

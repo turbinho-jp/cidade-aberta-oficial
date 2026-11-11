@@ -1,15 +1,18 @@
-import { useRoute } from "wouter";
-import { useGetDepartmentStats, getGetDepartmentStatsQueryKey } from "@workspace/api-client-react";
+import { Link, useRoute } from "wouter";
+import { useGetDepartmentStats, getGetDepartmentStatsQueryKey, useListDepartments } from "@workspace/api-client-react";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Building2, CheckCircle2, Clock, Megaphone, Activity } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { DemandCard } from "@/components/demand-card";
 
 export default function DepartmentDetail() {
   const [, params] = useRoute("/secretarias/:id");
   const deptId = parseInt(params?.id || "0");
   
+  const { data: departments } = useListDepartments();
+  const dept = departments?.find((d) => d.id === deptId);
   const { data: stats, isLoading } = useGetDepartmentStats(deptId, { query: { queryKey: getGetDepartmentStatsQueryKey(deptId), enabled: !!deptId } });
 
   if (isLoading) return <Layout><div className="container mx-auto p-8"><Skeleton className="h-[400px]" /></div></Layout>;
@@ -22,11 +25,14 @@ export default function DepartmentDetail() {
           <div className="space-y-4 max-w-2xl">
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-foreground flex items-center gap-3">
               <Building2 className="w-8 h-8 text-primary" />
-              Secretaria #{stats.departmentId}
+              {dept?.name ?? `Secretaria #${stats.departmentId}`}
             </h1>
             <p className="text-lg text-muted-foreground">
-              Desempenho e indicadores desta secretaria no atendimento à população.
+              {dept?.description || "Desempenho e indicadores desta secretaria no atendimento à população."}
             </p>
+            <Link href={`/demandas?departmentId=${stats.departmentId}`}>
+              <Button variant="outline" className="mt-2">Ver todas as demandas desta secretaria</Button>
+            </Link>
           </div>
           
           <div className="flex items-center gap-4 bg-primary/5 p-4 rounded-xl border border-primary/10">
@@ -70,6 +76,12 @@ export default function DepartmentDetail() {
             </CardContent>
           </Card>
         </div>
+
+        {stats.totalDemands === 0 && (
+          <div className="rounded-xl border border-dashed bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+            Esta secretaria ainda não recebeu demandas. Os indicadores aparecem aqui assim que as primeiras forem encaminhadas.
+          </div>
+        )}
 
         {stats.recentDemands && stats.recentDemands.length > 0 && (
           <div className="space-y-6 pt-8">
