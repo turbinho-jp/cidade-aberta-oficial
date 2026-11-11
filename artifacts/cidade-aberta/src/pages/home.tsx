@@ -24,11 +24,28 @@ export default function Home() {
         <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-3xl space-y-6">
             <h1 className="text-5xl md:text-7xl font-bold tracking-tight leading-tight">
-              Reporte, apoie e acompanhe os problemas da sua cidade.
+              Reporte, apoie e acompanhe os problemas da sua comunidade
             </h1>
             <p className="text-xl md:text-2xl text-primary-foreground/80 max-w-2xl">
-              Você marca o local, a prefeitura responde, você acompanha até resolver.
+              Veja como funciona o ciclo, em 3 passos:
             </p>
+            <ol className="grid sm:grid-cols-3 gap-4 max-w-3xl text-base">
+              {[
+                { title: "Reporte", text: "Marque o local do problema no mapa, com foto se puder." },
+                { title: "A prefeitura responde", text: "A demanda é analisada e encaminhada à secretaria responsável. Vizinhos podem apoiar." },
+                { title: "Acompanhe", text: "Siga cada mudança de status até o problema ser resolvido." },
+              ].map((step, i) => (
+                <li key={step.title} className="flex gap-3">
+                  <span className="shrink-0 w-8 h-8 rounded-full bg-primary-foreground text-primary font-bold flex items-center justify-center">
+                    {i + 1}
+                  </span>
+                  <span>
+                    <span className="block font-semibold">{step.title}</span>
+                    <span className="block text-sm text-primary-foreground/80">{step.text}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
             <div className="flex flex-wrap gap-4 pt-4">
               <Link href="/demandas/nova">
                 <Button size="lg" variant="secondary" className="font-semibold px-8 text-base">

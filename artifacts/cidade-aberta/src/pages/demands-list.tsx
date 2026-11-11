@@ -67,12 +67,13 @@ export default function DemandsList() {
           </div>
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
             <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-full sm:w-[150px] bg-background">
+              <SelectTrigger className="w-full sm:w-[160px] bg-background">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos os status</SelectItem>
                 <SelectItem value="open">Aberto</SelectItem>
+                <SelectItem value="under_review">Em análise</SelectItem>
                 <SelectItem value="in_progress">Em Andamento</SelectItem>
                 <SelectItem value="completed">Concluído</SelectItem>
                 <SelectItem value="closed">Fechado</SelectItem>
