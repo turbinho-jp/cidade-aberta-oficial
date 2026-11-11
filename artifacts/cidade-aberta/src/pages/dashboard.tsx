@@ -9,6 +9,7 @@ import { Activity, Users, CheckCircle2, Megaphone, Map as MapIcon, ArrowUpRight,
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { ActivityIcon } from "@/components/activity-icon";
+import { ExportDemandsCsv } from "@/components/export-demands-csv";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
@@ -255,6 +256,8 @@ export default function Dashboard() {
             </Card>
           </div>
         </div>
+
+        <ExportDemandsCsv />
       </div>
     </Layout>
   );

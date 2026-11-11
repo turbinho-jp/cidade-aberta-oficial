@@ -2,7 +2,7 @@ import { useListDepartments } from "@workspace/api-client-react";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, CheckCircle2, Clock, Megaphone, Percent } from "lucide-react";
+import { Building2, CheckCircle2, Clock, Info, Megaphone, Percent } from "lucide-react";
 import { Link } from "wouter";
 
 export default function Departments() {
@@ -23,8 +23,16 @@ export default function Departments() {
         </div>
 
         {!isLoading && departments && departments.length > 0 && !hasData && (
-          <div className="mb-6 rounded-xl border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
-            Os dados de desempenho das secretarias aparecem aqui assim que as primeiras demandas forem encaminhadas e resolvidas.
+          <div className="mb-6 rounded-xl border border-dashed bg-muted/20 p-6 flex gap-4 items-start">
+            <Info className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium text-foreground">Ainda não há histórico para comparar as secretarias</p>
+              <p className="text-muted-foreground mt-1">
+                Os indicadores de cada secretaria (demandas recebidas, taxa de resolução e tempo médio) aparecem aqui
+                assim que as primeiras demandas forem encaminhadas e resolvidas. Até lá, você pode conhecer as áreas
+                abaixo e acompanhar as demandas já publicadas.
+              </p>
+            </div>
           </div>
         )}
 
@@ -61,14 +69,14 @@ export default function Departments() {
                         </div>
                         <div className="flex flex-col items-center text-center">
                           <Clock className="w-5 h-5 text-blue-500 mb-1" />
-                          <span className="text-xl font-bold">{dept.avgResolutionDays != null ? `${dept.avgResolutionDays.toFixed(0)} d` : "—"}</span>
+                          <span className="text-xl font-bold">{(dept.resolvedCount || 0) > 0 && dept.avgResolutionDays ? `${dept.avgResolutionDays.toFixed(0)} d` : "—"}</span>
                           <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Tempo Médio</span>
                         </div>
                       </div>
                       <p className="text-sm text-primary font-medium mt-4">Ver detalhes da secretaria →</p>
                     </>
                   ) : (
-                    <p className="border-t pt-4 text-sm text-muted-foreground">Nenhuma demanda encaminhada ainda.</p>
+                    <p className="border-t pt-4 text-sm text-muted-foreground">Sem histórico ainda: nenhuma demanda foi encaminhada a esta secretaria. Os indicadores aparecerão aqui quando houver as primeiras.</p>
                   )}
                 </CardContent>
               </Card>
