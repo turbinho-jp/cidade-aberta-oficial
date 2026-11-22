@@ -5,7 +5,8 @@ import { z } from "zod/v4";
 
 export const activityTypeEnum = pgEnum("activity_type", [
   "demand_created", "demand_resolved", "comment_added",
-  "status_changed", "service_order_created", "confirmation_added"
+  "status_changed", "service_order_created", "confirmation_added",
+  "announcement"
 ]);
 
 export const activityLogTable = pgTable("activity_log", {
@@ -17,7 +18,7 @@ export const activityLogTable = pgTable("activity_log", {
   demandTitle: text("demand_title"),
   actorName: text("actor_name"),
   neighborhoodName: text("neighborhood_name"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [
   index("activity_log_created_at_idx").on(t.createdAt),
   index("activity_log_demand_id_idx").on(t.demandId),

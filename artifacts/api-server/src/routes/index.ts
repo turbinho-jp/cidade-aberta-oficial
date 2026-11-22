@@ -14,6 +14,7 @@ import publicWorksRouter from "./public_works";
 import dashboardRouter from "./dashboard";
 import usersRouter from "./users";
 import attachmentsRouter from "./attachments";
+import announcementsRouter from "./announcements";
 
 const router: IRouter = Router();
 
@@ -32,5 +33,6 @@ router.use(dashboardRouter);
 router.use(usersRouter);
 router.use(attachmentsRouter);
 router.use(resolutionValidationsRouter);
+router.use(announcementsRouter);
 
 export default router;
