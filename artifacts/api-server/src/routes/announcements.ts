@@ -40,11 +40,12 @@ router.get("/announcements", optionalAuth, async (req, res) => {
       scope: optional(oneOf(SCOPES), { blankAsMissing: true }),
       neighborhoodId: optional(int(), { blankAsMissing: true }),
       categoryId: optional(int(), { blankAsMissing: true }),
-      includeExpired: optional(bool()),
+      includeExpired: optional(oneOf(["true", "false", "1", "0"] as const), { blankAsMissing: true }),
     });
     if (!q.ok) return sendValidationError(res, q.errors);
 
-    const { scope, neighborhoodId, categoryId, includeExpired } = q.value;
+    const { scope, neighborhoodId, categoryId } = q.value;
+    const includeExpired = q.value.includeExpired === "true" || q.value.includeExpired === "1";
     const currentUser = (req as any).currentUser;
     const isAdmin = currentUser?.role === "admin" || currentUser?.role === "secretary";
 
