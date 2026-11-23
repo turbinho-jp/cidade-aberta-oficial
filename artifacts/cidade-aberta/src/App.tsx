@@ -22,6 +22,8 @@ import VerifyEmail from "@/pages/verify-email";
 import AdminDashboard from "@/pages/admin-dashboard";
 import AdminServiceOrders from "@/pages/admin-service-orders";
 import AdminModeration from "@/pages/admin-moderation";
+import Announcements from "@/pages/announcements";
+import AdminAnnouncements from "@/pages/admin-announcements";
 import Privacy from "@/pages/privacy";
 import Terms from "@/pages/terms";
 
@@ -38,14 +40,16 @@ function Router() {
       <Route path="/demandas/:id" component={DemandDetail} />
       <Route path="/painel" component={Dashboard} />
       <Route path="/obras" component={PublicWorks} />
+      <Route path="/avisos" component={Announcements} />
       <Route path="/secretarias" component={Departments} />
       <Route path="/secretarias/:id" component={DepartmentDetail} />
       <Route path="/perfil/:id" component={Profile} />
       <Route path="/ranking" component={Ranking} />
-      
+
       <Route path="/admin" component={AdminDashboard} />
       <Route path="/admin/ordens" component={AdminServiceOrders} />
       <Route path="/admin/moderacao" component={AdminModeration} />
+      <Route path="/admin/avisos" component={AdminAnnouncements} />
 
       <Route path="/privacidade" component={Privacy} />
       <Route path="/termos" component={Terms} />
@@ -53,7 +57,7 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/cadastro" component={Register} />
       <Route path="/verificar-email" component={VerifyEmail} />
-      
+
       <Route component={NotFound} />
     </Switch>
   );

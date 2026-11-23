@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useLogout } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { 
-  Menu, X, Map as MapIcon, Megaphone, 
+  Menu, X, Map as MapIcon, Megaphone, Bell,
   BarChart2, HardHat, Building2, UserCircle, LogOut, 
   Settings, LogIn, UserPlus, ShieldCheck
 } from "lucide-react";
@@ -12,11 +12,34 @@ import { cn } from "@/lib/utils";
 import { LevelBadge } from "@/components/level-badge";
 import { EmailVerificationBanner } from "@/components/email-verification-banner";
 
+type TopAnnouncement = {
+  id: number;
+  title: string;
+  scope: "municipal" | "estadual" | "comunitario";
+};
+
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated, isAdmin, isSecretary } = useAuth();
   const logoutMutation = useLogout();
   const [location] = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [latestNotice, setLatestNotice] = useState<TopAnnouncement | null>(null);
+  const [dismissedNoticeId, setDismissedNoticeId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/announcements", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { announcements: [] }))
+      .then((data) => {
+        if (active && Array.isArray(data.announcements) && data.announcements.length > 0) {
+          setLatestNotice(data.announcements[0]);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleLogout = () => {
     logoutMutation.mutate(undefined, {
@@ -29,6 +52,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const navLinks = [
     { href: "/mapa", label: "Mapa da Cidade", icon: MapIcon },
     { href: "/demandas", label: "Demandas", icon: Megaphone },
+    { href: "/avisos", label: "Avisos", icon: Bell },
     { href: "/obras", label: "Obras", icon: HardHat },
     { href: "/painel", label: "Transparência", icon: BarChart2 },
     { href: "/secretarias", label: "Secretarias", icon: Building2 },
@@ -88,6 +112,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     </Button>
                   </Link>
                 )}
+                {(isAdmin || isSecretary) && (
+                  <Link href="/admin/avisos">
+                    <Button variant="outline" size="sm" className="gap-2">
+                      <Bell className="w-4 h-4" />
+                      Avisos
+                    </Button>
+                  </Link>
+                )}
                 <Link href={`/perfil/${user?.id}`}>
                   <Button variant="ghost" size="sm" className="gap-2">
                     <UserCircle className="w-5 h-5" />
@@ -119,6 +151,36 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </header>
+
+      {/* Banner do Último Comunicado Oficial */}
+      {latestNotice && dismissedNoticeId !== latestNotice.id && location !== "/avisos" && (
+        <div className="bg-primary/10 border-b border-primary/20 text-foreground">
+          <div className="container mx-auto px-4 py-2 flex items-center justify-between gap-3 text-xs sm:text-sm">
+            <Link href="/avisos" className="flex items-center gap-2 min-w-0 hover:underline font-medium">
+              <Bell className="w-4 h-4 text-primary shrink-0" />
+              <span className="uppercase text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary text-primary-foreground shrink-0">
+                Aviso
+              </span>
+              <span className="truncate">{latestNotice.title}</span>
+            </Link>
+            <div className="flex items-center gap-2 shrink-0">
+              <Link href="/avisos">
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-primary">
+                  Ver mural
+                </Button>
+              </Link>
+              <button
+                type="button"
+                onClick={() => setDismissedNoticeId(latestNotice.id)}
+                className="p-1 text-muted-foreground hover:text-foreground"
+                aria-label="Fechar aviso"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <EmailVerificationBanner />
 
@@ -165,6 +227,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     <Button variant="outline" className="w-full justify-start text-base mb-2" size="lg">
                       <ShieldCheck className="w-5 h-5 mr-3" />
                       Moderação
+                    </Button>
+                  </Link>
+                )}
+                {(isAdmin || isSecretary) && (
+                  <Link href="/admin/avisos" onClick={() => setIsMobileMenuOpen(false)}>
+                    <Button variant="outline" className="w-full justify-start text-base mb-2" size="lg">
+                      <Bell className="w-5 h-5 mr-3" />
+                      Gerenciar Avisos
                     </Button>
                   </Link>
                 )}
