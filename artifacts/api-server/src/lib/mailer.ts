@@ -2,17 +2,17 @@ import nodemailer, { type Transporter } from "nodemailer";
 import { logger } from "./logger";
 
 /**
- * Envio de e-mail por SMTP (Nodemailer). Funciona com Gmail (senha de app) e com Brevo, só trocando
- * as variáveis de ambiente:
+- Envio de e-mail por SMTP (Nodemailer). Funciona com Gmail (senha de app) e com Brevo, só trocando
+- as variáveis de ambiente:
  *
- *   SMTP_HOST   Gmail: smtp.gmail.com        Brevo: smtp-relay.brevo.com
- *   SMTP_PORT   Gmail: 465                    Brevo: 587   (465 usa TLS direto; as outras, STARTTLS)
- *   SMTP_USER   Gmail: o endereço completo    Brevo: o login SMTP mostrado no painel
- *   SMTP_PASS   Gmail: senha de app de 16 letras (NÃO a senha da conta)   Brevo: a chave SMTP
- *   MAIL_FROM   remetente exibido, ex.: Cidade Aberta <voce@gmail.com>. No Gmail precisa ser o
- *               próprio endereço de SMTP_USER; no Brevo, um remetente verificado no painel.
+-   SMTP_HOST   Gmail: smtp.gmail.com        Brevo: smtp-relay.brevo.com
+-   SMTP_PORT   Gmail: 465                    Brevo: 587   (465 usa TLS direto; as outras, STARTTLS)
+-   SMTP_USER   Gmail: o endereço completo    Brevo: o login SMTP mostrado no painel
+-   SMTP_PASS   Gmail: senha de app de 16 letras (NÃO a senha da conta)   Brevo: a chave SMTP
+-   MAIL_FROM   remetente exibido, ex.: Cidade Aberta <voce@gmail.com>. No Gmail precisa ser o
+-               próprio endereço de SMTP_USER; no Brevo, um remetente verificado no painel.
  *
- * Sem essas variáveis o envio é pulado e registrado no log (o cadastro continua funcionando).
+- Sem essas variáveis o envio é pulado e registrado no log (o cadastro continua funcionando).
  */
 let transporter: Transporter | null = null;
 
@@ -137,6 +137,43 @@ export async function sendDemandStatusEmail(
     return true;
   } catch (err) {
     logger.error({ err, demandId: demand.id, status }, "Falha ao enviar o aviso de status");
+    return false;
+  }
+}
+
+/** Envia o link de redefinição de senha (vale por 1 hora). Nunca lança; devolve true se o SMTP aceitou. */
+export async function sendPasswordResetEmail(to: string, name: string, token: string): Promise<boolean> {
+  const t = getTransporter();
+  const base = appUrl();
+  if (!t || !base) {
+    logger.error({ hasSmtp: !!t, hasAppUrl: !!base }, "E-mail de redefinição não enviado: SMTP_* ou APP_URL não configurados");
+    return false;
+  }
+  const link = `${base}/redefinir-senha?token=${encodeURIComponent(token)}`;
+  const from = process.env["MAIL_FROM"] || process.env["SMTP_USER"];
+  const firstName = escapeHtml(name.split(/\s+/)[0] || "olá");
+  try {
+    await t.sendMail({
+      from,
+      to,
+      subject: "Redefinição de senha — Cidade Aberta",
+      text:
+        `Olá, ${name.split(/\s+/)[0] || ""}!\n\n` +
+        `Recebemos um pedido para criar uma nova senha na sua conta do Cidade Aberta.\n` +
+        `Abra o link abaixo para escolher sua nova senha (vale por 1 hora):\n\n` +
+        `${link}\n\n` +
+        `Se você não pediu essa troca, ignore este e-mail — sua senha atual continua valendo.`,
+      html:
+        `<p>Olá, ${firstName}!</p>` +
+        `<p>Recebemos um pedido para criar uma nova senha na sua conta do <strong>Cidade Aberta</strong>.</p>` +
+        `<p>Clique no botão abaixo para cadastrar sua nova senha (o link vale por <strong>1 hora</strong>):</p>` +
+        `<p><a href="${link}" style="display:inline-block;padding:12px 20px;background:#0f766e;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Criar nova senha</a></p>` +
+        `<p style="color:#555;font-size:13px">Se o botão não funcionar, copie este endereço no navegador:<br>${escapeHtml(link)}</p>` +
+        `<p style="color:#555;font-size:13px">Se você não pediu essa troca, ignore este e-mail — sua senha atual continua valendo.</p>`,
+    });
+    return true;
+  } catch (err) {
+    logger.error({ err }, "Falha ao enviar o e-mail de redefinição de senha");
     return false;
   }
 }

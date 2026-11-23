@@ -19,6 +19,8 @@ import Ranking from "@/pages/ranking";
 import Login from "@/pages/login";
 import Register from "@/pages/register";
 import VerifyEmail from "@/pages/verify-email";
+import ForgotPassword from "@/pages/forgot-password";
+import ResetPassword from "@/pages/reset-password";
 import AdminDashboard from "@/pages/admin-dashboard";
 import AdminServiceOrders from "@/pages/admin-service-orders";
 import AdminModeration from "@/pages/admin-moderation";
@@ -57,6 +59,8 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/cadastro" component={Register} />
       <Route path="/verificar-email" component={VerifyEmail} />
+      <Route path="/esqueci-senha" component={ForgotPassword} />
+      <Route path="/redefinir-senha" component={ResetPassword} />
 
       <Route component={NotFound} />
     </Switch>

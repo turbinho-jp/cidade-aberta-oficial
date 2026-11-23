@@ -4,7 +4,7 @@ import { db, usersTable, emailVerificationTokensTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 import { hashPassword, verifyPassword, setAuthCookie, clearAuthCookie, getUserFromCookie, requireAuth } from "../lib/auth";
 import { isLoginBlocked, recordLoginFailure, registerAttemptBlocked, verificationResendBlocked } from "../lib/rate-limit";
-import { sendVerificationEmail } from "../lib/mailer";
+import { sendVerificationEmail, sendPasswordResetEmail } from "../lib/mailer";
 import { parseBody, sendValidationError, text, email, optional } from "../lib/validate";
 
 const router = Router();
@@ -14,12 +14,14 @@ const clientIp = (req: Request) => req.ip || "unknown";
 
 /** O link de confirmação vale por 24 horas. */
 const VERIFICATION_TTL_HOURS = 24;
+/** O link de redefinição de senha vale por 1 hora. */
+const RESET_TTL_HOURS = 1;
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
 /**
- * Gera um link novo (apagando os anteriores da pessoa) e envia por e-mail. Só o hash do token fica no
- * banco. A validade é calculada pelo relógio do banco (como em rate-limit.ts), não pelo do Node.
- * Devolve true se o servidor de e-mail aceitou a mensagem.
+- Gera um link novo (apagando os anteriores da pessoa) e envia por e-mail. Só o hash do token fica no
+- banco. A validade é calculada pelo relógio do banco (como em rate-limit.ts), não pelo do Node.
+- Devolve true se o servidor de e-mail aceitou a mensagem.
  */
 async function issueVerificationEmail(user: { id: number; name: string; email: string }): Promise<boolean> {
   const token = randomBytes(32).toString("base64url");
@@ -122,6 +124,87 @@ router.post("/auth/login", async (req, res) => {
         commentsCount: user.commentsCount, emailVerified: !!user.emailVerifiedAt, createdAt: user.createdAt.toISOString(),
       }
     });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Solicita link de redefinição de senha por e-mail
+router.post("/auth/forgot-password", async (req, res) => {
+  try {
+    const body = parseBody(req.body, {
+      email: email(),
+    });
+    if (!body.ok) return sendValidationError(res, body.errors);
+    const { email: userEmail } = body.value;
+
+    const [user] = await db
+      .select({ id: usersTable.id, name: usersTable.name, email: usersTable.email })
+      .from(usersTable)
+      .where(sql`lower(${usersTable.email}) = ${userEmail}`)
+      .limit(1);
+
+    // Resposta sempre genérica para não revelar quais e-mails têm conta cadastrada
+    if (user) {
+      if (await verificationResendBlocked(user.id)) {
+        res.setHeader("Retry-After", "3600");
+        res.status(429).json({ error: "Too many requests" });
+        return;
+      }
+
+      const token = randomBytes(32).toString("base64url");
+      const tokenHash = hashToken(token);
+
+      await db.execute(sql`DELETE FROM password_reset_tokens WHERE user_id = ${user.id}`);
+      await db.execute(sql`
+        INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+        VALUES (${user.id}, ${tokenHash}, now() + make_interval(hours => ${RESET_TTL_HOURS}))
+      `);
+
+      await sendPasswordResetEmail(user.email, user.name, token).catch((err) => req.log.error(err));
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Conclui a troca da senha usando o token recebido por e-mail
+router.post("/auth/reset-password", async (req, res) => {
+  try {
+    const body = parseBody(req.body, {
+      token: text({ min: 20, max: 200 }),
+      password: text({ min: 8, max: 128, trim: false }),
+    });
+    if (!body.ok) return sendValidationError(res, body.errors);
+
+    const tokenHash = hashToken(body.value.token);
+    const result = await db.execute(sql`
+      DELETE FROM password_reset_tokens
+      WHERE token_hash = ${tokenHash}
+      RETURNING user_id, (expires_at > now()) AS valid
+    `);
+
+    const row = (result as any)?.rows?.[0] ?? (Array.isArray(result) ? result[0] : null);
+    if (!row) {
+      res.status(400).json({ error: "Invalid link", code: "TOKEN_INVALID" });
+      return;
+    }
+    if (!row.valid) {
+      res.status(410).json({ error: "Link expired", code: "TOKEN_EXPIRED" });
+      return;
+    }
+
+    const userId = Number(row.user_id);
+    const newHash = await hashPassword(body.value.password);
+
+    await db.update(usersTable).set({ passwordHash: newHash }).where(eq(usersTable.id, userId));
+    await db.execute(sql`DELETE FROM password_reset_tokens WHERE user_id = ${userId}`);
+
+    res.json({ reset: true });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Internal server error" });
