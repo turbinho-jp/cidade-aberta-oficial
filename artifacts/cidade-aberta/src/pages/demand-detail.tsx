@@ -133,8 +133,6 @@ export default function DemandDetail() {
       onSuccess: () => {
         setNewComment("");
         toast({ title: "Comentário enviado" });
-        // Assume we have a getListCommentsQueryKey, invalidate it or refetch
-        // Orval generated hooks don't always export list query keys cleanly without params
         queryClient.invalidateQueries({ queryKey: [`/api/demands/${demandId}/comments`] });
       },
       onError: (err) => {
@@ -394,7 +392,18 @@ export default function DemandDetail() {
                   </div>
                 )}
 
-                <ShareDemand id={demand.id} title={demand.title} />
+                <ShareDemand
+                  id={demand.id}
+                  title={demand.title}
+                  description={demand.description}
+                  status={demand.status}
+                  neighborhood={demand.neighborhood?.name}
+                  address={demand.address}
+                  category={demand.category?.name}
+                  confirmationsCount={demand.confirmationsCount}
+                  createdAt={demand.createdAt}
+                  photoUrl={coverUrl(demand)}
+                />
               </CardContent>
             </Card>
 
