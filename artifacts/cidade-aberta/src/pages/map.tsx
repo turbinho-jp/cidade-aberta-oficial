@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { useListDemands, useListCategories, useListNeighborhoods } from "@workspace/api-client-react";
+import {
+  useListDemands,
+  useListCategories,
+  useListNeighborhoods,
+  useListPublicWorks,
+  DemandStatus,
+} from "@workspace/api-client-react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -9,21 +15,30 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusBadge, isPendingModeration } from "@/components/status-badge";
-import { DemandStatus } from "@workspace/api-client-react";
 import { CategoryIcon } from "@/components/category-icon";
-import { Search, Loader2, MapPin, AlertTriangle, Megaphone, SlidersHorizontal, X } from "lucide-react";
+import {
+  Search,
+  Loader2,
+  MapPin,
+  AlertTriangle,
+  Megaphone,
+  SlidersHorizontal,
+  X,
+  HardHat,
+  Bell,
+} from "lucide-react";
 import { JOAO_PESSOA_CENTER, DEFAULT_ZOOM, isInsideServiceArea } from "@/lib/geo";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
-const createCustomIcon = (status: string, pending = false) => {
+const createDemandIcon = (status: string, pending = false) => {
   let color = "#64748b";
   if (status === "open") color = "#f59e0b";
   if (status === "under_review" || status === "approved") color = "#a855f7";
@@ -44,6 +59,49 @@ const createCustomIcon = (status: string, pending = false) => {
     iconAnchor: [14, 42],
     popupAnchor: [0, -44],
   });
+};
+
+const createWorkIcon = () => {
+  const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 40" fill="#1d4ed8" stroke="white" stroke-width="1.5">
+    <path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 26 14 26s14-15.5 14-26C28 6.3 21.7 0 14 0z"/>
+    <circle cx="14" cy="14" r="7.5" fill="white"/>
+    <path d="M9.5 15.5h9M10.5 15.5a3.5 3.5 0 0 1 7 0M14 10.5v2" stroke="#1d4ed8" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+  </svg>`;
+
+  return L.divIcon({
+    className: "",
+    html: svgIcon,
+    iconSize: [30, 42],
+    iconAnchor: [15, 42],
+    popupAnchor: [0, -44],
+  });
+};
+
+const createAnnouncementIcon = () => {
+  const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 40" fill="#7c3aed" stroke="white" stroke-width="1.5">
+    <path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 26 14 26s14-15.5 14-26C28 6.3 21.7 0 14 0z"/>
+    <circle cx="14" cy="14" r="7.5" fill="white"/>
+    <path d="M14 9.5a3 3 0 0 1 3 3v2l1 1v.5h-8v-.5l1-1v-2a3 3 0 0 1 3-3zM12.8 17.5a1.3 1.3 0 0 0 2.4 0" stroke="#7c3aed" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  </svg>`;
+
+  return L.divIcon({
+    className: "",
+    html: svgIcon,
+    iconSize: [30, 42],
+    iconAnchor: [15, 42],
+    popupAnchor: [0, -44],
+  });
+};
+
+type MapAnnouncement = {
+  id: number;
+  title: string;
+  body?: string;
+  address?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  neighborhoodId?: number | null;
+  createdAt?: string;
 };
 
 function MapViewportController({
@@ -78,6 +136,13 @@ export default function MapPage() {
   const [neighborhoodId, setNeighborhoodId] = useState<string>("all");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
+  // Camadas ativas no mapa
+  const [showDemands, setShowDemands] = useState(true);
+  const [showWorks, setShowWorks] = useState(true);
+  const [showAnnouncements, setShowAnnouncements] = useState(true);
+
+  const [announcements, setAnnouncements] = useState<MapAnnouncement[]>([]);
+
   const activeExtraFiltersCount = (status !== "all" ? 1 : 0) + (categoryId !== "all" ? 1 : 0);
 
   const { data: demandsResponse, isLoading: loadingDemands } = useListDemands({
@@ -88,17 +153,36 @@ export default function MapPage() {
     limit: 500,
   });
 
+  const { data: worksResponse } = useListPublicWorks({});
   const { data: categories } = useListCategories();
   const { data: neighborhoods } = useListNeighborhoods();
+
+  // Carrega avisos ativos para exibir os que tiverem geolocalização
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/announcements", { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        const list = Array.isArray(data) ? data : Array.isArray(data.announcements) ? data.announcements : [];
+        setAnnouncements(list);
+      })
+      .catch(() => {
+        // Silencioso caso a rota não retorne dados
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const selectedNeighborhoodName = useMemo(() => {
     if (neighborhoodId === "all") return null;
     return neighborhoods?.find((n) => n.id.toString() === neighborhoodId)?.name ?? null;
   }, [neighborhoodId, neighborhoods]);
 
-  const { visibleDemands, hiddenCount, stats, points } = useMemo(() => {
+  const { visibleDemands, hiddenCount, stats } = useMemo(() => {
     const all = demandsResponse?.demands ?? [];
-    const visible = all.filter(d => d.lat != null && d.lng != null && isInsideServiceArea(d.lat, d.lng));
+    const visible = all.filter((d) => d.lat != null && d.lng != null && isInsideServiceArea(d.lat, d.lng));
     let open = 0;
     let inProgress = 0;
     let completed = 0;
@@ -111,9 +195,56 @@ export default function MapPage() {
       visibleDemands: visible,
       hiddenCount: all.length - visible.length,
       stats: { open, inProgress, completed, total: visible.length },
-      points: visible.map((d) => [d.lat, d.lng] as [number, number]),
     };
   }, [demandsResponse?.demands]);
+
+  const visibleWorks = useMemo(() => {
+    const all = Array.isArray(worksResponse) ? worksResponse : [];
+    return all.filter((w: any) => {
+      if (w.lat == null || w.lng == null || !isInsideServiceArea(w.lat, w.lng)) return false;
+      if (neighborhoodId !== "all" && w.neighborhoodId?.toString() !== neighborhoodId) return false;
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        const matchTitle = w.title?.toLowerCase().includes(q);
+        const matchDesc = w.description?.toLowerCase().includes(q);
+        if (!matchTitle && !matchDesc) return false;
+      }
+      return true;
+    });
+  }, [worksResponse, neighborhoodId, search]);
+
+  const visibleAnnouncements = useMemo(() => {
+    return announcements.filter((a) => {
+      if (a.lat == null || a.lng == null || !isInsideServiceArea(a.lat, a.lng)) return false;
+      if (neighborhoodId !== "all" && a.neighborhoodId?.toString() !== neighborhoodId) return false;
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        const matchTitle = a.title?.toLowerCase().includes(q);
+        const matchBody = a.body?.toLowerCase().includes(q);
+        if (!matchTitle && !matchBody) return false;
+      }
+      return true;
+    });
+  }, [announcements, neighborhoodId, search]);
+
+  const allPoints = useMemo(() => {
+    const pts: Array<[number, number]> = [];
+    if (showDemands) {
+      for (const d of visibleDemands) pts.push([d.lat, d.lng]);
+    }
+    if (showWorks) {
+      for (const w of visibleWorks as any[]) pts.push([w.lat, w.lng]);
+    }
+    if (showAnnouncements) {
+      for (const a of visibleAnnouncements) {
+        if (a.lat != null && a.lng != null) pts.push([a.lat, a.lng]);
+      }
+    }
+    return pts;
+  }, [showDemands, showWorks, showAnnouncements, visibleDemands, visibleWorks, visibleAnnouncements]);
+
+  const workIcon = useMemo(() => createWorkIcon(), []);
+  const announcementIcon = useMemo(() => createAnnouncementIcon(), []);
 
   return (
     <Layout>
@@ -122,7 +253,7 @@ export default function MapPage() {
         <div className="z-20 bg-card border-b px-3 py-2.5 sm:p-4 shadow-sm flex flex-col lg:flex-row gap-2.5 lg:gap-4 lg:items-center lg:justify-between flex-shrink-0">
           <div className="hidden lg:flex items-center gap-2">
             <MapPin className="w-5 h-5 text-primary" />
-            <h1 className="text-xl font-bold">Mapa de Demandas</h1>
+            <h1 className="text-xl font-bold">Mapa da Cidade</h1>
           </div>
 
           {/* Linha principal: Bairro + Botão Filtros no mobile */}
@@ -133,8 +264,10 @@ export default function MapPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos os bairros</SelectItem>
-                {neighborhoods?.map(n => (
-                  <SelectItem key={n.id} value={n.id.toString()}>{n.name}</SelectItem>
+                {neighborhoods?.map((n) => (
+                  <SelectItem key={n.id} value={n.id.toString()}>
+                    {n.name}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -161,7 +294,7 @@ export default function MapPage() {
             <div className="relative flex-1 lg:w-56">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
-                placeholder="Buscar demandas..."
+                placeholder="Buscar no mapa..."
                 className="pl-9 h-9 text-sm"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -189,8 +322,10 @@ export default function MapPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas as categorias</SelectItem>
-                {categories?.map(c => (
-                  <SelectItem key={c.id} value={c.id.toString()}>{c.name}</SelectItem>
+                {categories?.map((c) => (
+                  <SelectItem key={c.id} value={c.id.toString()}>
+                    {c.name}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -199,33 +334,80 @@ export default function MapPage() {
 
         {/* Map */}
         <div className="flex-1 relative z-10 min-h-0">
-          {/* Resumo flutuante compacto */}
+          {/* Painel flutuante superior: Resumo + Camadas alternáveis */}
           {!loadingDemands && (
-            <div className="absolute top-3 left-14 right-3 sm:right-auto z-[1000] rounded-xl border bg-card/95 backdrop-blur-sm px-3 py-2 shadow-md flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] sm:text-xs">
-              <span className="font-bold text-foreground">
-                {selectedNeighborhoodName ? selectedNeighborhoodName : "João Pessoa"}
-              </span>
-              <span className="flex items-center gap-1 text-amber-600 font-semibold">
-                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
-                {stats.open} {stats.open === 1 ? "aberta" : "abertas"}
-              </span>
-              <span className="flex items-center gap-1 text-cyan-600 font-semibold">
-                <span className="w-2 h-2 rounded-full bg-cyan-500 inline-block" />
-                {stats.inProgress} andamento
-              </span>
-              <span className="flex items-center gap-1 text-green-600 font-semibold">
-                <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
-                {stats.completed} {stats.completed === 1 ? "resolvida" : "resolvidas"}
-              </span>
-              {neighborhoodId !== "all" && (
+            <div className="absolute top-3 left-14 right-3 sm:right-auto z-[1000] flex flex-col gap-1.5">
+              {/* Resumo numérico */}
+              <div className="rounded-xl border bg-card/95 backdrop-blur-sm px-3 py-2 shadow-md flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] sm:text-xs">
+                <span className="font-bold text-foreground">
+                  {selectedNeighborhoodName ? selectedNeighborhoodName : "João Pessoa"}
+                </span>
+                <span className="flex items-center gap-1 text-amber-600 font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
+                  {stats.open} {stats.open === 1 ? "aberta" : "abertas"}
+                </span>
+                <span className="flex items-center gap-1 text-cyan-600 font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-cyan-500 inline-block" />
+                  {stats.inProgress} andamento
+                </span>
+                <span className="flex items-center gap-1 text-green-600 font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+                  {stats.completed} {stats.completed === 1 ? "resolvida" : "resolvidas"}
+                </span>
+                {neighborhoodId !== "all" && (
+                  <button
+                    type="button"
+                    onClick={() => setNeighborhoodId("all")}
+                    className="text-primary font-medium hover:underline"
+                  >
+                    Limpar
+                  </button>
+                )}
+              </div>
+
+              {/* Botões de camadas do mapa */}
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setNeighborhoodId("all")}
-                  className="text-primary font-medium hover:underline"
+                  onClick={() => setShowDemands((v) => !v)}
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm border transition flex items-center gap-1.5 ${
+                    showDemands
+                      ? "bg-amber-500 text-white border-amber-600"
+                      : "bg-card/95 text-muted-foreground border-border hover:bg-muted"
+                  }`}
                 >
-                  Limpar
+                  <MapPin className="w-3 h-3" />
+                  Demandas ({visibleDemands.length})
                 </button>
-              )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowWorks((v) => !v)}
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm border transition flex items-center gap-1.5 ${
+                    showWorks
+                      ? "bg-blue-700 text-white border-blue-800"
+                      : "bg-card/95 text-muted-foreground border-border hover:bg-muted"
+                  }`}
+                >
+                  <HardHat className="w-3 h-3" />
+                  Obras ({visibleWorks.length})
+                </button>
+
+                {visibleAnnouncements.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAnnouncements((v) => !v)}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm border transition flex items-center gap-1.5 ${
+                      showAnnouncements
+                        ? "bg-violet-600 text-white border-violet-700"
+                        : "bg-card/95 text-muted-foreground border-border hover:bg-muted"
+                    }`}
+                  >
+                    <Bell className="w-3 h-3" />
+                    Avisos ({visibleAnnouncements.length})
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -233,10 +415,11 @@ export default function MapPage() {
             <div className="absolute inset-0 z-[1000] bg-background/50 flex items-center justify-center backdrop-blur-sm">
               <div className="flex flex-col items-center gap-2">
                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                <p className="font-medium text-primary">Carregando demandas...</p>
+                <p className="font-medium text-primary">Carregando mapa...</p>
               </div>
             </div>
           )}
+
           {hiddenCount > 0 && (
             <div className="hidden sm:flex absolute bottom-4 left-4 z-[1000] max-w-xs rounded-md border bg-card/95 p-3 text-xs shadow gap-2 items-start">
               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
@@ -245,25 +428,26 @@ export default function MapPage() {
               </span>
             </div>
           )}
+
           <MapContainer
             center={JOAO_PESSOA_CENTER}
             zoom={DEFAULT_ZOOM}
             style={{ width: "100%", height: "100%" }}
             zoomControl={true}
           >
-            <MapViewportController
-              points={points}
-              hasNeighborhoodFilter={neighborhoodId !== "all"}
-            />
+            <MapViewportController points={allPoints} hasNeighborhoodFilter={neighborhoodId !== "all"} />
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
-            {visibleDemands.map((demand) => (
+
+            {/* Camada: Demandas */}
+            {showDemands &&
+              visibleDemands.map((demand) => (
                 <Marker
-                  key={demand.id}
+                  key={`demand-${demand.id}`}
                   position={[demand.lat, demand.lng]}
-                  icon={createCustomIcon(demand.status, isPendingModeration(demand))}
+                  icon={createDemandIcon(demand.status, isPendingModeration(demand))}
                 >
                   <Popup>
                     <div style={{ minWidth: 200 }} className="flex flex-col gap-2 p-1">
@@ -280,9 +464,7 @@ export default function MapPage() {
                       >
                         {demand.title}
                       </Link>
-                      {demand.address && (
-                        <p className="text-xs text-muted-foreground truncate">{demand.address}</p>
-                      )}
+                      {demand.address && <p className="text-xs text-muted-foreground truncate">{demand.address}</p>}
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         {demand.category && <CategoryIcon name={demand.category.icon} className="w-3 h-3" />}
                         <span className="truncate">{demand.category?.name}</span>
@@ -291,7 +473,71 @@ export default function MapPage() {
                     </div>
                   </Popup>
                 </Marker>
-            ))}
+              ))}
+
+            {/* Camada: Obras Públicas */}
+            {showWorks &&
+              visibleWorks.map((work: any) => (
+                <Marker key={`work-${work.id}`} position={[work.lat, work.lng]} icon={workIcon}>
+                  <Popup>
+                    <div style={{ minWidth: 210 }} className="flex flex-col gap-2 p-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 text-blue-800 px-2 py-0.5 text-[10px] font-bold">
+                          <HardHat className="w-3 h-3" /> Obra Pública
+                        </span>
+                        <span className="text-[10px] font-semibold text-muted-foreground">
+                          {work.status === "completed"
+                            ? "Concluída"
+                            : work.status === "in_progress"
+                              ? "Em andamento"
+                              : work.status === "planned"
+                                ? "Planejada"
+                                : "Suspensa"}
+                        </span>
+                      </div>
+                      <Link href="/obras" className="font-semibold text-blue-700 hover:underline text-sm leading-tight">
+                        {work.title}
+                      </Link>
+                      {work.description && (
+                        <p className="text-xs text-muted-foreground line-clamp-2">{work.description}</p>
+                      )}
+                      {typeof work.progressPercent === "number" && (
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-[11px] font-medium">
+                            <span>Execução</span>
+                            <span>{work.progressPercent}%</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-600 rounded-full"
+                              style={{ width: `${Math.min(100, Math.max(0, work.progressPercent))}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </Popup>
+                </Marker>
+              ))}
+
+            {/* Camada: Avisos */}
+            {showAnnouncements &&
+              visibleAnnouncements.map((ann) => (
+                <Marker key={`ann-${ann.id}`} position={[ann.lat!, ann.lng!]} icon={announcementIcon}>
+                  <Popup>
+                    <div style={{ minWidth: 200 }} className="flex flex-col gap-2 p-1">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 text-violet-800 px-2 py-0.5 text-[10px] font-bold w-fit">
+                        <Bell className="w-3 h-3" /> Aviso Comunitário
+                      </span>
+                      <Link href="/avisos" className="font-semibold text-violet-700 hover:underline text-sm leading-tight">
+                        {ann.title}
+                      </Link>
+                      {ann.body && <p className="text-xs text-muted-foreground line-clamp-2">{ann.body}</p>}
+                      {ann.address && <p className="text-[11px] text-muted-foreground truncate">{ann.address}</p>}
+                    </div>
+                  </Popup>
+                </Marker>
+              ))}
           </MapContainer>
 
           <Link href="/demandas/nova" className="fixed bottom-5 right-4 left-4 sm:left-auto z-[1000]">
