@@ -1,6 +1,6 @@
 import { db, activityLogTable } from "@workspace/db";
 
-type ActivityType = "demand_created" | "demand_resolved" | "comment_added" | "status_changed" | "service_order_created" | "confirmation_added";
+type ActivityType = "demand_created" | "demand_resolved" | "comment_added" | "status_changed" | "service_order_created" | "confirmation_added" | "announcement";
 
 export async function logActivity(params: {
   type: ActivityType;
