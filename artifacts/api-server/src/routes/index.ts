@@ -15,6 +15,7 @@ import dashboardRouter from "./dashboard";
 import usersRouter from "./users";
 import attachmentsRouter from "./attachments";
 import announcementsRouter from "./announcements";
+import shareRouter from "./share";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(usersRouter);
 router.use(attachmentsRouter);
 router.use(resolutionValidationsRouter);
 router.use(announcementsRouter);
+router.use(shareRouter);
 
 export default router;

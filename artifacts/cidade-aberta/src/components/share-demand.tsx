@@ -4,10 +4,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { useToast } from "@/hooks/use-toast";
 import { Share2, MessageCircle, Link2, FileText, ImageDown, Loader2 } from "lucide-react";
 
-/** URL direta e limpa da demanda (sem query/hash), respeitando o base path do app. */
+/** URL de compartilhamento com Open Graph (foto e resumo no WhatsApp), que redireciona para /demandas/:id. */
 export function demandUrl(id: number): string {
-  const base = import.meta.env.BASE_URL.replace(/\/$/, "");
-  return `${window.location.origin}${base}/demandas/${id}`;
+  return `${window.location.origin}/api/share/demands/${id}`;
 }
 
 export type ShareDemandProps = {
