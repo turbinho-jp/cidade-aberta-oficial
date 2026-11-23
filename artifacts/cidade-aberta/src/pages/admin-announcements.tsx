@@ -7,7 +7,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Loader2, Megaphone, Trash2, Send } from "lucide-react";
 import { format } from "date-fns";
 import type { AnnouncementItem } from "./announcements";
@@ -19,7 +18,6 @@ export default function AdminAnnouncements() {
   const [items, setItems] = useState<AnnouncementItem[] | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [scope, setScope] = useState<"municipal" | "estadual" | "comunitario">("municipal");
   const [imageUrl, setImageUrl] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -33,7 +31,7 @@ export default function AdminAnnouncements() {
       setItems(data.announcements ?? []);
     } catch {
       setItems([]);
-      toast({ title: "Erro ao carregar avisos", variant: "destructive" });
+      toast({ title: "Erro ao carregar publicações", variant: "destructive" });
     }
   }, [toast]);
 
@@ -56,28 +54,28 @@ export default function AdminAnnouncements() {
         body: JSON.stringify({
           title: title.trim(),
           body: body.trim(),
-          scope,
+          scope: "comunitario",
           imageUrl: imageUrl.trim() || null,
           expiresAt: expiresAt ? new Date(`${expiresAt}T23:59:59`).toISOString() : null,
           isPublished: true,
         }),
       });
       if (!res.ok) throw new Error();
-      toast({ title: "Aviso publicado no mural" });
+      toast({ title: "Publicação enviada para o mural" });
       setTitle("");
       setBody("");
       setImageUrl("");
       setExpiresAt("");
       load();
     } catch {
-      toast({ title: "Não foi possível publicar o aviso", variant: "destructive" });
+      toast({ title: "Não foi possível publicar", variant: "destructive" });
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!window.confirm("Remover este aviso permanentemente?")) return;
+    if (!window.confirm("Remover esta publicação permanentemente?")) return;
     setDeletingId(id);
     try {
       const res = await fetch(`/api/announcements/${id}`, {
@@ -86,7 +84,7 @@ export default function AdminAnnouncements() {
       });
       if (!res.ok) throw new Error();
       setItems((cur) => (cur ?? []).filter((i) => i.id !== id));
-      toast({ title: "Aviso removido" });
+      toast({ title: "Publicação removida" });
     } catch {
       toast({ title: "Não foi possível remover", variant: "destructive" });
     } finally {
@@ -100,7 +98,7 @@ export default function AdminAnnouncements() {
     return (
       <Layout>
         <div className="container mx-auto px-4 py-12 text-center text-muted-foreground">
-          Acesso restrito à equipe de gestão.
+          Acesso restrito à administração da plataforma.
         </div>
       </Layout>
     );
@@ -115,21 +113,21 @@ export default function AdminAnnouncements() {
             Gerenciar Mural de Avisos
           </h1>
           <p className="text-muted-foreground mt-1">
-            Publique comunicados oficiais que aparecem no mural público e no feed de atividades.
+            Divulgue acontecimentos, ações comunitárias, campanhas e informativos para os moradores.
           </p>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Novo Comunicado</CardTitle>
+            <CardTitle className="text-lg">Nova Publicação</CardTitle>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
-                <Label htmlFor="title">Título do aviso</Label>
+                <Label htmlFor="title">Título</Label>
                 <Input
                   id="title"
-                  placeholder="Ex.: Interdição programada na Av. Presidente Delfim Moreira"
+                  placeholder="Ex.: Mutirão de limpeza e ação social neste sábado"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   required
@@ -138,21 +136,18 @@ export default function AdminAnnouncements() {
 
               <div className="grid sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label htmlFor="scope">Esfera</Label>
-                  <select
-                    id="scope"
-                    value={scope}
-                    onChange={(e) => setScope(e.target.value as any)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="municipal">Municipal</option>
-                    <option value="estadual">Estadual</option>
-                    <option value="comunitario">Comunitário</option>
-                  </select>
+                  <Label htmlFor="imageUrl">URL de imagem/foto (opcional)</Label>
+                  <Input
+                    id="imageUrl"
+                    type="url"
+                    placeholder="https://..."
+                    value={imageUrl}
+                    onChange={(e) => setImageUrl(e.target.value)}
+                  />
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="expiresAt">Válido até (opcional)</Label>
+                  <Label htmlFor="expiresAt">Exibir até (opcional)</Label>
                   <Input
                     id="expiresAt"
                     type="date"
@@ -163,22 +158,11 @@ export default function AdminAnnouncements() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="imageUrl">URL de imagem/banner (opcional)</Label>
-                <Input
-                  id="imageUrl"
-                  type="url"
-                  placeholder="https://..."
-                  value={imageUrl}
-                  onChange={(e) => setImageUrl(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="body">Mensagem completa</Label>
+                <Label htmlFor="body">Texto da publicação</Label>
                 <Textarea
                   id="body"
                   rows={4}
-                  placeholder="Descreva os detalhes, datas, locais afetados e orientações..."
+                  placeholder="Escreva os detalhes do acontecimento, data, local e orientações..."
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
                   required
@@ -194,22 +178,19 @@ export default function AdminAnnouncements() {
         </Card>
 
         <div className="space-y-3">
-          <h2 className="text-lg font-semibold">Avisos Publicados</h2>
+          <h2 className="text-lg font-semibold">Publicações Ativas</h2>
           {items === null ? (
             <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div>
           ) : items.length === 0 ? (
-            <Card><CardContent className="py-8 text-center text-muted-foreground">Nenhum aviso cadastrado.</CardContent></Card>
+            <Card><CardContent className="py-8 text-center text-muted-foreground">Nenhuma publicação cadastrada.</CardContent></Card>
           ) : (
             items.map((item) => (
               <Card key={item.id}>
                 <CardContent className="p-4 flex items-start justify-between gap-4">
                   <div className="space-y-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="secondary">{item.scope}</Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {format(new Date(item.publishedAt), "dd/MM/yyyy")}
-                      </span>
-                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {format(new Date(item.publishedAt), "dd/MM/yyyy 'às' HH:mm")}
+                    </span>
                     <h3 className="font-semibold">{item.title}</h3>
                     <p className="text-sm text-muted-foreground line-clamp-2">{item.body}</p>
                   </div>
