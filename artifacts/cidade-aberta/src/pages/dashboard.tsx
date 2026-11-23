@@ -72,7 +72,7 @@ export default function Dashboard() {
       if (!d.departmentId) continue;
       const entry = map.get(d.departmentId) ?? {
         id: d.departmentId,
-        name: d.department?.name || `Secretaria #${d.departmentId}`,
+        name: `Secretaria #${d.departmentId}`,
         total: 0,
         resolved: 0,
         pending: 0,
@@ -82,9 +82,8 @@ export default function Dashboard() {
       entry.total += 1;
       if (d.status === "completed" || d.status === "closed") {
         entry.resolved += 1;
-        const end = d.resolvedAt || d.updatedAt;
-        if (end) {
-          const days = Math.max(0, (new Date(end).getTime() - new Date(d.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+        if (d.updatedAt) {
+          const days = Math.max(0, (new Date(d.updatedAt).getTime() - new Date(d.createdAt).getTime()) / (1000 * 60 * 60 * 24));
           entry.resolutionDaysSum += days;
           entry.resolutionDaysCount += 1;
         }
