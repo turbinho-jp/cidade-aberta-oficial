@@ -24,9 +24,9 @@ const router = Router();
 // publicamente depois da aprovação. O autor e a equipe (admin/secretário) sempre a enxergam.
 
 /**
-- Efeitos de uma demanda se tornar pública: contadores de bairro/categoria e pontos do autor.
-- Chamar UMA vez por demanda, dentro da transação, depois de gravar `is_approved = true`
-- (na criação por equipe ou na aprovação de uma pendente).
+ * Efeitos de uma demanda se tornar pública: contadores de bairro/categoria e pontos do autor.
+ * Chamar UMA vez por demanda, dentro da transação, depois de gravar `is_approved = true`
+ * (na criação por equipe ou na aprovação de uma pendente).
  */
 async function creditPublication(tx: Tx, d: { id: number; neighborhoodId: number; categoryId: number; authorId: number }) {
   await syncNeighborhoodCounters(tx, [d.neighborhoodId]);
@@ -110,4 +110,69 @@ router.get("/demands", optionalAuth, async (req, res) => {
     const catIds = [...new Set(demands.map(d => d.categoryId))];
     const nbrIds = [...new Set(demands.map(d => d.neighborhoodId))];
     const [categories, neighborhoods, attachmentsByDemand] = await Promise.all([
-      catIds.length ? db.select().
+      catIds.length ? db.select().from(categoriesTable).where(inArray(categoriesTable.id, catIds)) : [],
+      nbrIds.length ? db.select().from(neighborhoodsTable).where(inArray(neighborhoodsTable.id, nbrIds)) : [],
+      loadAttachmentMeta("demand", demands.map(d => d.id)),
+    ]);
+    const catMap = Object.fromEntries(categories.map(c => [c.id, c]));
+    const nbrMap = Object.fromEntries(neighborhoods.map(n => [n.id, n]));
+
+    res.json({
+      demands: demands.map(d => formatDemand(d, catMap[d.categoryId], nbrMap[d.neighborhoodId], undefined, confirmedIds.has(d.id), attachmentsByDemand.get(d.id), currentUser)),
+      total: count,
+    });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Fila de moderação. Precisa vir ANTES de "/demands/:id", senão "pending" seria lido como id.
+router.get("/demands/pending", requireAdmin, async (req, res) => {
+  try {
+    const demands = await db.select().from(demandsTable)
+      .where(and(eq(demandsTable.isApproved, false), eq(demandsTable.status, "open")))
+      .orderBy(desc(demandsTable.createdAt))
+      .limit(100);
+
+    const catIds = [...new Set(demands.map(d => d.categoryId))];
+    const nbrIds = [...new Set(demands.map(d => d.neighborhoodId))];
+    const [categories, neighborhoods, attachmentsByDemand] = await Promise.all([
+      catIds.length ? db.select().from(categoriesTable).where(inArray(categoriesTable.id, catIds)) : [],
+      nbrIds.length ? db.select().from(neighborhoodsTable).where(inArray(neighborhoodsTable.id, nbrIds)) : [],
+      loadAttachmentMeta("demand", demands.map(d => d.id)),
+    ]);
+    const catMap = Object.fromEntries(categories.map(c => [c.id, c]));
+    const nbrMap = Object.fromEntries(neighborhoods.map(n => [n.id, n]));
+
+    res.json({
+      demands: demands.map(d => formatDemand(d, catMap[d.categoryId], nbrMap[d.neighborhoodId], undefined, false, attachmentsByDemand.get(d.id), (req as any).currentUser)),
+      total: demands.length,
+    });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.post("/demands", requireAuth, async (req, res) => {
+  try {
+    const currentUser = (req as any).currentUser;
+    const body = parseBody(req.body, {
+      // Sem título (ou em branco), o servidor monta "[Categoria] em [Bairro] — [Endereço curto]".
+      title: optional(text({ min: 5, max: 150 }), { blankAsMissing: true }),
+      description: text({ min: 10, max: 5000 }),
+      categoryId: int(),
+      neighborhoodId: int(),
+      address: text({ min: 5, max: 300 }),
+      lat: serviceAreaLat(),
+      lng: serviceAreaLng(),
+      photoUrl: optional(httpUrl(), { blankAsMissing: true }),
+      isAnonymous: optional(bool()),
+    });
+    if (!body.ok) return sendValidationError(res, body.errors);
+    const { title: givenTitle, description, categoryId, neighborhoodId, address, lat, lng, photoUrl } = body.value;
+    const isAnonymous = body.value.isAnonymous === true;
+
+    const [[category], [neighborhood]] = await Promise.all([
+      db.select({ id: categoriesTable.id, name: categoriesTable.name }).from(categoriesTable).where(eq(categoriesTable.id,
