@@ -13,6 +13,11 @@ import { LocationPicker } from "@/components/location-picker";
 import { PhotoPicker, type PickedPhoto } from "@/components/photo-picker";
 import type { AnnouncementItem } from "./announcements";
 
+type AdminAnnouncementItem = AnnouncementItem & {
+  lat?: number | null;
+  lng?: number | null;
+};
+
 async function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -26,7 +31,7 @@ export default function AdminAnnouncements() {
   const { isAdmin, isSecretary, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
 
-  const [items, setItems] = useState<AnnouncementItem[] | null>(null);
+  const [items, setItems] = useState<AdminAnnouncementItem[] | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [imageUrl, setImageUrl] = useState("");
@@ -62,7 +67,6 @@ export default function AdminAnnouncements() {
     try {
       let finalImageUrl: string | null = imageUrl.trim() || null;
 
-      // Se o administrador escolheu uma foto/flyer direto do aparelho, converte para Data URL
       if (photos.length > 0) {
         finalImageUrl = await blobToDataUrl(photos[0].blob);
       }
