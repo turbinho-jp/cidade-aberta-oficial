@@ -1,7 +1,7 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { useListDemands, useListCategories } from "@workspace/api-client-react";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import { useListDemands, useListCategories, useListNeighborhoods } from "@workspace/api-client-react";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { Layout } from "@/components/layout";
@@ -48,41 +48,85 @@ const createCustomIcon = (status: string, pending = false) => {
   });
 };
 
+function MapViewportController({
+  points,
+  hasNeighborhoodFilter,
+}: {
+  points: Array<[number, number]>;
+  hasNeighborhoodFilter: boolean;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!hasNeighborhoodFilter) {
+      map.flyTo(JOAO_PESSOA_CENTER, DEFAULT_ZOOM, { duration: 0.8 });
+      return;
+    }
+    if (points.length === 1) {
+      map.flyTo(points[0], 16, { duration: 0.8 });
+    } else if (points.length > 1) {
+      const bounds = L.latLngBounds(points);
+      map.flyToBounds(bounds, { padding: [60, 60], maxZoom: 16, duration: 0.8 });
+    }
+  }, [map, points, hasNeighborhoodFilter]);
+
+  return null;
+}
+
 export default function MapPage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<string>("all");
   const [categoryId, setCategoryId] = useState<string>("all");
+  const [neighborhoodId, setNeighborhoodId] = useState<string>("all");
 
   const { data: demandsResponse, isLoading: loadingDemands } = useListDemands({
     search: search || undefined,
     status: status !== "all" ? (status as DemandStatus) : undefined,
     categoryId: categoryId !== "all" ? parseInt(categoryId) : undefined,
+    neighborhoodId: neighborhoodId !== "all" ? parseInt(neighborhoodId) : undefined,
     limit: 500,
   });
 
   const { data: categories } = useListCategories();
+  const { data: neighborhoods } = useListNeighborhoods();
+
+  const selectedNeighborhoodName = useMemo(() => {
+    if (neighborhoodId === "all") return null;
+    return neighborhoods?.find((n) => n.id.toString() === neighborhoodId)?.name ?? null;
+  }, [neighborhoodId, neighborhoods]);
 
   // Só aparecem no mapa demandas dentro da área de atendimento (João Pessoa e região).
-  // Registros antigos com coordenadas fora dela (ex.: geradas aleatoriamente em São Paulo)
-  // são contados à parte em vez de aparecerem num lugar errado ou deslocarem o mapa.
-  const { visibleDemands, hiddenCount } = useMemo(() => {
+  const { visibleDemands, hiddenCount, stats, points } = useMemo(() => {
     const all = demandsResponse?.demands ?? [];
     const visible = all.filter(d => d.lat != null && d.lng != null && isInsideServiceArea(d.lat, d.lng));
-    return { visibleDemands: visible, hiddenCount: all.length - visible.length };
+    let open = 0;
+    let inProgress = 0;
+    let completed = 0;
+    for (const d of visible) {
+      if (d.status === "completed" || d.status === "closed") completed += 1;
+      else if (d.status === "in_progress") inProgress += 1;
+      else if (d.status !== "rejected") open += 1;
+    }
+    return {
+      visibleDemands: visible,
+      hiddenCount: all.length - visible.length,
+      stats: { open, inProgress, completed, total: visible.length },
+      points: visible.map((d) => [d.lat, d.lng] as [number, number]),
+    };
   }, [demandsResponse?.demands]);
 
   return (
     <Layout>
       <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 64px)" }}>
         {/* Filter bar */}
-        <div className="z-20 bg-card border-b p-4 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between flex-shrink-0">
+        <div className="z-20 bg-card border-b p-4 shadow-sm flex flex-col lg:flex-row gap-4 items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-2">
             <MapPin className="w-5 h-5 text-primary" />
             <h1 className="text-xl font-bold">Mapa de Demandas</h1>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-            <div className="relative flex-1 md:w-64">
+          <div className="flex flex-col sm:flex-row flex-wrap gap-3 w-full lg:w-auto">
+            <div className="relative flex-1 sm:w-56">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
                 placeholder="Buscar demandas..."
@@ -92,8 +136,20 @@ export default function MapPage() {
               />
             </div>
 
+            <Select value={neighborhoodId} onValueChange={setNeighborhoodId}>
+              <SelectTrigger className="w-full sm:w-[175px]">
+                <SelectValue placeholder="Bairro" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos os bairros</SelectItem>
+                {neighborhoods?.map(n => (
+                  <SelectItem key={n.id} value={n.id.toString()}>{n.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
             <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-full sm:w-[160px]">
+              <SelectTrigger className="w-full sm:w-[155px]">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
@@ -108,7 +164,7 @@ export default function MapPage() {
             </Select>
 
             <Select value={categoryId} onValueChange={setCategoryId}>
-              <SelectTrigger className="w-full sm:w-[180px]">
+              <SelectTrigger className="w-full sm:w-[175px]">
                 <SelectValue placeholder="Categoria" />
               </SelectTrigger>
               <SelectContent>
@@ -123,6 +179,36 @@ export default function MapPage() {
 
         {/* Map */}
         <div style={{ flex: 1, position: "relative", zIndex: 10 }}>
+          {/* Resumo flutuante do bairro / visão atual */}
+          {!loadingDemands && (
+            <div className="absolute top-4 left-14 right-4 sm:right-auto z-[1000] rounded-xl border bg-card/95 backdrop-blur-sm px-4 py-2.5 shadow-md flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+              <span className="font-bold text-foreground">
+                {selectedNeighborhoodName ? selectedNeighborhoodName : "João Pessoa"}
+              </span>
+              <span className="flex items-center gap-1.5 text-amber-600 font-semibold">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" />
+                {stats.open} {stats.open === 1 ? "aberta" : "abertas"}
+              </span>
+              <span className="flex items-center gap-1.5 text-cyan-600 font-semibold">
+                <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 inline-block" />
+                {stats.inProgress} em andamento
+              </span>
+              <span className="flex items-center gap-1.5 text-green-600 font-semibold">
+                <span className="w-2.5 h-2.5 rounded-full bg-green-500 inline-block" />
+                {stats.completed} {stats.completed === 1 ? "resolvida" : "resolvidas"}
+              </span>
+              {neighborhoodId !== "all" && (
+                <button
+                  type="button"
+                  onClick={() => setNeighborhoodId("all")}
+                  className="text-primary font-medium hover:underline ml-1"
+                >
+                  Limpar bairro
+                </button>
+              )}
+            </div>
+          )}
+
           {loadingDemands && (
             <div className="absolute inset-0 z-[1000] bg-background/50 flex items-center justify-center backdrop-blur-sm">
               <div className="flex flex-col items-center gap-2">
@@ -145,6 +231,10 @@ export default function MapPage() {
             style={{ width: "100%", height: "100%" }}
             zoomControl={true}
           >
+            <MapViewportController
+              points={points}
+              hasNeighborhoodFilter={neighborhoodId !== "all"}
+            />
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -182,9 +272,9 @@ export default function MapPage() {
                   </Popup>
                 </Marker>
             ))}
-               </MapContainer>
+          </MapContainer>
 
-                    <Link href="/demandas/nova" className="absolute bottom-6 right-4 z-[1000]">
+          <Link href="/demandas/nova" className="absolute bottom-6 right-4 z-[1000]">
             <Button size="lg" className="rounded-full shadow-lg font-bold gap-2">
               <Megaphone className="w-5 h-5" />
               Reportar problema
