@@ -175,4 +175,303 @@ router.post("/demands", requireAuth, async (req, res) => {
     const isAnonymous = body.value.isAnonymous === true;
 
     const [[category], [neighborhood]] = await Promise.all([
-      db.select({ id: categoriesTable.id, name: categoriesTable.name }).from(categoriesTable).where(eq(categoriesTable.id,
+      db.select({ id: categoriesTable.id, name: categoriesTable.name }).from(categoriesTable).where(eq(categoriesTable.id, categoryId)).limit(1),
+      db.select().from(neighborhoodsTable).where(eq(neighborhoodsTable.id, neighborhoodId)).limit(1),
+    ]);
+    if (!category) return sendValidationError(res, { categoryId: "categoria não encontrada" });
+    if (!neighborhood) return sendValidationError(res, { neighborhoodId: "bairro não encontrado" });
+    const title = givenTitle ?? buildAutoTitle(category.name, neighborhood.name, address);
+    const authorLabel = isAnonymous ? ANONYMOUS_NAME : currentUser.name;
+
+    // Equipe publica direto; cidadão entra na fila de moderação.
+    const autoApproved = isStaff(currentUser);
+
+    // Demanda + contadores + linha do tempo na mesma transação: ou tudo grava, ou nada.
+    const demand = await db.transaction(async (tx) => {
+      const [created] = await tx.insert(demandsTable).values({
+        title, description, categoryId, neighborhoodId, address, lat, lng,
+        photoUrl: photoUrl || null,
+        authorId: currentUser.id,
+        authorName: currentUser.name,
+        isAnonymous,
+        status: "open",
+        isApproved: autoApproved,
+      }).returning();
+      await tx.update(usersTable).set({ demandsCount: sql`${usersTable.demandsCount} + 1` }).where(eq(usersTable.id, currentUser.id));
+      // Contadores públicos (bairro, categoria) e pontos só contam demanda PUBLICADA: para
+      // cidadão isso acontece na aprovação (PATCH /demands/:id/approve), não aqui.
+      if (autoApproved) await creditPublication(tx, created);
+      await tx.insert(timelineTable).values({ demandId: created.id, event: "Demanda criada", description: "Demanda registrada pelo cidadão", actorName: authorLabel, actorRole: "citizen", statusTo: "open" });
+      return created;
+    });
+    // O log de atividade (feed público) só sai quando a demanda é publicada.
+    if (autoApproved) {
+      await logActivity({ type: "demand_created", description: `Nova demanda: ${title}`, demandId: demand.id, demandTitle: title, actorName: authorLabel, neighborhoodName: neighborhood?.name });
+    }
+
+    res.status(201).json(formatDemand(demand, undefined, undefined, undefined, false, [], currentUser));
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get("/demands/:id", optionalAuth, async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return sendValidationError(res, { id: "id inválido" });
+    const [demand] = await db.select().from(demandsTable).where(eq(demandsTable.id, id)).limit(1);
+    const currentUser = (req as any).currentUser;
+    if (!demand || !canSee(currentUser, demand)) { res.status(404).json({ error: "Not found" }); return; }
+
+    let isConfirmedByMe = false;
+    if (currentUser) {
+      const [conf] = await db.select().from(confirmationsTable).where(and(eq(confirmationsTable.demandId, id), eq(confirmationsTable.userId, currentUser.id))).limit(1);
+      isConfirmedByMe = !!conf;
+    }
+
+    const [{ validationsCount }] = await db.select({ validationsCount: sql<number>`count(*)::int` })
+      .from(resolutionValidationsTable).where(eq(resolutionValidationsTable.demandId, id));
+    let isResolutionValidatedByMe = false;
+    if (currentUser) {
+      const [mine] = await db.select({ id: resolutionValidationsTable.id }).from(resolutionValidationsTable)
+        .where(and(eq(resolutionValidationsTable.demandId, id), eq(resolutionValidationsTable.userId, currentUser.id))).limit(1);
+      isResolutionValidatedByMe = !!mine;
+    }
+
+    const [categories, neighborhoods, departments, timeline, serviceOrders, attachmentsByDemand] = await Promise.all([
+      db.select().from(categoriesTable).where(eq(categoriesTable.id, demand.categoryId)),
+      db.select().from(neighborhoodsTable).where(eq(neighborhoodsTable.id, demand.neighborhoodId)),
+      demand.departmentId ? db.select().from(departmentsTable).where(eq(departmentsTable.id, demand.departmentId)) : Promise.resolve([]),
+      db.select().from(timelineTable).where(and(eq(timelineTable.demandId, id), eq(timelineTable.isPublic, true))).orderBy(timelineTable.createdAt),
+      db.select().from(serviceOrdersTable).where(eq(serviceOrdersTable.demandId, id)),
+      loadAttachmentMeta("demand", [id]),
+    ]);
+
+    const teamIds = [...new Set(serviceOrders.filter(o => o.teamId).map(o => o.teamId!))];
+    const teams = teamIds.length ? await db.select().from(teamsTable).where(inArray(teamsTable.id, teamIds)) : [];
+    const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+
+    res.json({
+      ...formatDemand(demand, categories[0], neighborhoods[0], departments[0], isConfirmedByMe, attachmentsByDemand.get(id), currentUser),
+      validationsCount, isResolutionValidatedByMe,
+      timeline: timeline.map(t => ({
+        id: t.id, demandId: t.demandId, event: t.event, description: t.description,
+        actorName: t.actorRole === "citizen" ? publicNameOrNull(t.actorName) : t.actorName, actorRole: t.actorRole, statusFrom: t.statusFrom,
+        statusTo: t.statusTo, isPublic: t.isPublic, createdAt: t.createdAt.toISOString(),
+      })),
+      serviceOrders: serviceOrders.map(o => ({
+        id: o.id, demandId: o.demandId, title: o.title, description: o.description,
+        status: o.status, priority: o.priority, teamId: o.teamId,
+        team: o.teamId ? teamMap[o.teamId] : undefined,
+        estimatedCompletion: o.estimatedCompletion?.toISOString() ?? null,
+        completedAt: o.completedAt?.toISOString() ?? null,
+        slaHours: o.slaHours, notes: o.notes,
+        createdAt: o.createdAt.toISOString(), updatedAt: o.updatedAt.toISOString(),
+      })),
+    });
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.patch("/demands/:id", requireAdmin, async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return sendValidationError(res, { id: "id inválido" });
+    const body = parseBody(req.body, {
+      title: optional(text({ min: 5, max: 150 })),
+      description: optional(text({ min: 10, max: 5000 })),
+      priority: optional(nullable(oneOf(demandPriorityEnum.enumValues))),
+      departmentId: optional(nullable(int())),
+      publicResponse: optional(nullable(text({ min: 0, max: 2000 }))),
+    });
+    if (!body.ok) return sendValidationError(res, body.errors);
+    const { title, description, priority, departmentId, publicResponse } = body.value;
+    if (Object.keys(body.value).length === 0) {
+      return sendValidationError(res, { body: "informe ao menos um campo para atualizar" });
+    }
+    if (departmentId) {
+      const [dept] = await db.select({ id: departmentsTable.id }).from(departmentsTable).where(eq(departmentsTable.id, departmentId)).limit(1);
+      if (!dept) return sendValidationError(res, { departmentId: "secretaria não encontrada" });
+    }
+    const demand = await db.transaction(async (tx) => {
+      // Trava a demanda para ler a secretaria atual sem corrida com outra edição.
+      const [existing] = await tx.select().from(demandsTable).where(eq(demandsTable.id, id)).limit(1).for("update");
+      if (!existing) return null;
+      const [updated] = await tx.update(demandsTable).set({
+        ...(title !== undefined && { title }),
+        ...(description !== undefined && { description }),
+        ...(priority !== undefined && { priority }),
+        ...(departmentId !== undefined && { departmentId }),
+        ...(publicResponse !== undefined && { publicResponse }),
+        updatedAt: new Date(),
+      }).where(eq(demandsTable.id, id)).returning();
+      // Mudou de secretaria: recalcula a antiga e a nova (total e resolvidas).
+      if (departmentId !== undefined && departmentId !== existing.departmentId) {
+        await syncDepartmentCounters(tx, [existing.departmentId, departmentId]);
+      }
+      return updated;
+    });
+    if (!demand) { res.status(404).json({ error: "Not found" }); return; }
+    res.json(formatDemand(demand, undefined, undefined, undefined, false, [], (req as any).currentUser));
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Aprova uma demanda pendente: passa a aparecer publicamente e entra no feed de atividade.
+router.patch("/demands/:id/approve", requireAdmin, async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return sendValidationError(res, { id: "id inválido" });
+    const currentUser = (req as any).currentUser as { id: number; role: string; name: string };
+
+    const result = await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(demandsTable).where(eq(demandsTable.id, id)).limit(1).for("update");
+      if (!existing) return null;
+      if (existing.isApproved) return { existing, demand: existing, changed: false };
+      const [updated] = await tx.update(demandsTable).set({ isApproved: true, updatedAt: new Date() }).where(eq(demandsTable.id, id)).returning();
+      await creditPublication(tx, updated);
+      await tx.insert(timelineTable).values({
+        demandId: id, event: "Demanda publicada", description: "Demanda aprovada para publicação",
+        actorName: currentUser.name, actorRole: currentUser.role,
+      });
+      return { existing, demand: updated, changed: true };
+    });
+    if (!result) { res.status(404).json({ error: "Not found" }); return; }
+
+    if (result.changed) {
+      const [neighborhood] = await db.select({ name: neighborhoodsTable.name }).from(neighborhoodsTable).where(eq(neighborhoodsTable.id, result.existing.neighborhoodId)).limit(1);
+      await logActivity({
+        type: "demand_created", description: `Nova demanda: ${result.existing.title}`,
+        demandId: id, demandTitle: result.existing.title,
+        actorName: result.existing.isAnonymous ? ANONYMOUS_NAME : result.existing.authorName, neighborhoodName: neighborhood?.name,
+      });
+      // Falha de e-mail só vai pro log (notifyDemandAuthor nunca lança).
+      await notifyDemandAuthor({ id, title: result.existing.title, authorId: result.existing.authorId }, "published");
+    }
+
+    res.json(formatDemand(result.demand, undefined, undefined, undefined, false, [], currentUser));
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get("/demands/:id/timeline", optionalAuth, async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return sendValidationError(res, { id: "id inválido" });
+    const [demand] = await db.select({ isApproved: demandsTable.isApproved, authorId: demandsTable.authorId })
+      .from(demandsTable).where(eq(demandsTable.id, id)).limit(1);
+    if (!demand || !canSee((req as any).currentUser, demand)) { res.json([]); return; }
+    const events = await db.select().from(timelineTable)
+      .where(and(eq(timelineTable.demandId, id), eq(timelineTable.isPublic, true)))
+      .orderBy(timelineTable.createdAt);
+    res.json(events.map(t => ({
+      id: t.id, demandId: t.demandId, event: t.event, description: t.description,
+      actorName: t.actorRole === "citizen" ? publicNameOrNull(t.actorName) : t.actorName, actorRole: t.actorRole, statusFrom: t.statusFrom,
+      statusTo: t.statusTo, isPublic: t.isPublic, createdAt: t.createdAt.toISOString(),
+    })));
+  } catch (err) {
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.patch("/demands/:id/status", requireAdmin, async (req, res) => {
+  try {
+    const id = parseId(req.params.id);
+    if (id === null) return sendValidationError(res, { id: "id inválido" });
+    const body = parseBody(req.body, {
+      status: oneOf(demandStatusEnum.enumValues),
+      note: optional(text({ min: 1, max: 1000 }), { blankAsMissing: true }),
+      publicResponse: optional(nullable(text({ min: 0, max: 2000 }))),
+    });
+    if (!body.ok) return sendValidationError(res, body.errors);
+    const { status, note, publicResponse } = body.value;
+    const currentUser = (req as any).currentUser as { id: number; role: string; name: string };
+
+    const result = await db.transaction(async (tx) => {
+      // Trava a demanda: duas mudanças de status simultâneas se enfileiram em vez de se atropelarem.
+      const [existing] = await tx.select().from(demandsTable).where(eq(demandsTable.id, id)).limit(1).for("update");
+      if (!existing) return null;
+      if (existing.status !== status && !canTransition(existing.status, status)) {
+        throw new Error("INVALID_TRANSITION");
+      }
+      const [updated] = await tx.update(demandsTable).set({
+        status,
+        ...(publicResponse !== undefined && { publicResponse }),
+        updatedAt: new Date(),
+      }).where(eq(demandsTable.id, id)).returning();
+      await tx.insert(timelineTable).values({
+        demandId: id, event: `Status atualizado para: ${status}`,
+        description: note || publicResponse || undefined,
+        actorName: currentUser.name,
+        actorRole: currentUser.role,
+        statusFrom: existing.status, statusTo: status,
+      });
+      // "Resolvidas" = demandas em `completed`. Só muda quando entra ou sai desse status, e é
+      // recalculado (não somado), então completed -> completed e reabrir uma demanda não distorcem.
+      const wasCompleted = existing.status === "completed";
+      if (wasCompleted !== (status === "completed")) {
+        await syncNeighborhoodCounters(tx, [existing.neighborhoodId]);
+        await syncDepartmentCounters(tx, [existing.departmentId]);
+      }
+      // Pontos do autor por demanda concluída. Só vale para demanda já publicada. A chave é por
+      // demanda: concluir de novo depois de reabrir não paga duas vezes (reativa a mesma linha),
+      // e reabrir uma demanda concluída desfaz os pontos.
+      if (existing.isApproved) {
+        const key = `demand_resolved:${id}`;
+        if (status === "completed" && !wasCompleted) {
+          await awardPoints(tx, { userId: existing.authorId, amount: POINTS.DEMAND_RESOLVED, reason: "demand_resolved", dedupeKey: key, demandId: id });
+        } else if (wasCompleted && status !== "completed") {
+          await revokePoints(tx, key);
+          // A resolução deixou de valer: as confirmações da comunidade e os pontos delas caem junto.
+          const removed = await tx.delete(resolutionValidationsTable)
+            .where(eq(resolutionValidationsTable.demandId, id))
+            .returning({ userId: resolutionValidationsTable.userId });
+          for (const v of removed) {
+            for (const k of resolutionValidationKeys(id, v.userId)) await revokePoints(tx, k);
+          }
+        }
+      }
+      return { existing, demand: updated, wasCompleted };
+    });
+    if (!result) { res.status(404).json({ error: "Not found" }); return; }
+    const { existing, demand, wasCompleted } = result;
+
+    const [neighborhood] = await db.select({ name: neighborhoodsTable.name }).from(neighborhoodsTable).where(eq(neighborhoodsTable.id, existing.neighborhoodId)).limit(1);
+    const neighborhoodName = neighborhood?.name;
+    if (status === "completed" && !wasCompleted) {
+      await logActivity({ type: "demand_resolved", description: `Demanda resolvida: ${existing.title}`, demandId: id, demandTitle: existing.title, actorName: currentUser.name, neighborhoodName });
+    } else {
+      await logActivity({ type: "status_changed", description: `Status atualizado para ${status}: ${existing.title}`, demandId: id, demandTitle: existing.title, actorName: currentUser.name, neighborhoodName });
+    }
+
+    // Avisa o autor por e-mail. Só se o status mudou de fato e é um dos notificáveis. Demanda ainda
+    // não publicada só avisa na rejeição (moderação): o autor enxerga a própria demanda pendente.
+    // Falha de SMTP nunca derruba a rota (o status já foi salvo): fica registrada no log.
+    if (existing.status !== status && NOTIFIABLE_STATUSES.includes(status) && (existing.isApproved || status === "rejected")) {
+      await notifyDemandAuthor(
+        { id, title: existing.title, authorId: existing.authorId },
+        status as StatusEmailKind,
+        publicResponse || note,
+      );
+    }
+
+    res.json(formatDemand(demand, undefined, undefined, undefined, false, [], currentUser));
+  } catch (err) {
+    if (err instanceof Error && err.message === "INVALID_TRANSITION") {
+      res.status(400).json({ error: "Transição de status inválida" });
+      return;
+    }
+    req.log.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+export default router;
