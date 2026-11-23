@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useSearch } from "wouter";
 import { useListDemands, useListCategories, useListNeighborhoods } from "@workspace/api-client-react";
 import { Layout } from "@/components/layout";
@@ -6,9 +6,18 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { DemandCard } from "@/components/demand-card";
-import { Search, Loader2, Megaphone, Plus } from "lucide-react";
+import { Search, Megaphone, Plus, AlertTriangle, Clock } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
+
+const STALE_DAYS = 7;
+const CRITICAL_DAYS = 15;
+
+function getUnansweredDays(demand: { status: string; createdAt: string; publicResponse?: string | null }): number {
+  if (!["open", "under_review"].includes(demand.status) || demand.publicResponse) return 0;
+  const diffMs = Date.now() - new Date(demand.createdAt).getTime();
+  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+}
 
 export default function DemandsList() {
   const { isAuthenticated } = useAuth();
@@ -18,6 +27,7 @@ export default function DemandsList() {
   const [status, setStatus] = useState<string>("all");
   const [categoryId, setCategoryId] = useState<string>("all");
   const [neighborhoodId, setNeighborhoodId] = useState<string>("all");
+  const [onlyUnanswered, setOnlyUnanswered] = useState(false);
 
   const { data: demandsResponse, isLoading } = useListDemands({
     search: search || undefined,
@@ -25,11 +35,23 @@ export default function DemandsList() {
     categoryId: categoryId !== "all" ? parseInt(categoryId) : undefined,
     neighborhoodId: neighborhoodId !== "all" ? parseInt(neighborhoodId) : undefined,
     departmentId: departmentId && !Number.isNaN(parseInt(departmentId)) ? parseInt(departmentId) : undefined,
-    limit: 50,
+    limit: 100,
   });
 
   const { data: categories } = useListCategories();
   const { data: neighborhoods } = useListNeighborhoods();
+
+  const { displayedDemands, staleCount } = useMemo(() => {
+    const all = demandsResponse?.demands ?? [];
+    const stale = all.filter((d) => getUnansweredDays(d) >= STALE_DAYS);
+    if (!onlyUnanswered) {
+      return { displayedDemands: all, staleCount: stale.length };
+    }
+    const sorted = [...stale].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+    return { displayedDemands: sorted, staleCount: stale.length };
+  }, [demandsResponse, onlyUnanswered]);
 
   return (
     <Layout>
@@ -55,7 +77,7 @@ export default function DemandsList() {
           </div>
         )}
 
-        <div className="bg-card border rounded-lg p-4 mb-8 flex flex-col md:flex-row gap-4 items-center shadow-sm">
+        <div className="bg-card border rounded-lg p-4 mb-4 flex flex-col md:flex-row gap-4 items-center shadow-sm">
           <div className="relative flex-1 w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input 
@@ -106,17 +128,66 @@ export default function DemandsList() {
           </div>
         </div>
 
+        {/* Radar de Cobrança: Demandas sem resposta */}
+        {!isLoading && staleCount > 0 && (
+          <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-amber-300/80 bg-amber-50/70 dark:bg-amber-950/25 dark:border-amber-800 px-4 py-3">
+            <div className="flex items-center gap-2.5 text-sm">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                <strong>Radar de Cobrança:</strong>{" "}
+                {staleCount === 1
+                  ? "1 demanda está há mais de 7 dias sem resposta."
+                  : `${staleCount} demandas estão há mais de 7 dias sem resposta.`}
+              </span>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant={onlyUnanswered ? "default" : "outline"}
+              className="shrink-0"
+              onClick={() => setOnlyUnanswered((v) => !v)}
+            >
+              {onlyUnanswered ? "Mostrar todas" : "Filtrar sem resposta"}
+            </Button>
+          </div>
+        )}
+
         {isLoading ? (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {Array.from({ length: 6 }).map((_, i) => (
               <Skeleton key={i} className="h-[300px] rounded-xl" />
             ))}
           </div>
-        ) : demandsResponse?.demands.length ? (
+        ) : displayedDemands.length ? (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {demandsResponse.demands.map(demand => (
-              <DemandCard key={demand.id} demand={demand} />
-            ))}
+            {displayedDemands.map(demand => {
+              const days = getUnansweredDays(demand);
+              const isCritical = days >= CRITICAL_DAYS;
+              const isStale = days >= STALE_DAYS;
+              return (
+                <div key={demand.id} className="flex flex-col">
+                  {isStale && (
+                    <Link
+                      href={`/demandas/${demand.id}`}
+                      className={`mb-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between border ${
+                        isCritical
+                          ? "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800"
+                          : "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800"
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5" />
+                        {isCritical ? "Crítica · " : ""}Sem resposta há {days} dias
+                      </span>
+                      <span>Cobrar →</span>
+                    </Link>
+                  )}
+                  <div className="flex-1">
+                    <DemandCard demand={demand} />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div className="text-center py-20 bg-muted/20 border border-dashed rounded-xl">

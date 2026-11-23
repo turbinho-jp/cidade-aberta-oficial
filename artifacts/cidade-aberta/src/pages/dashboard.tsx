@@ -1,11 +1,17 @@
-import { useState, useMemo, useEffect } from "react";
-import { useLocation } from "wouter";
+import { useState, useMemo } from "react";
 import { Layout } from "@/components/layout";
-import { useAuth } from "@/lib/auth";
-import { useGetDashboardSummary, useGetDemandsByNeighborhood, useGetDemandsByCategory, useGetRecentActivity, useGetCitizenRanking } from "@workspace/api-client-react";
+import {
+  useGetDashboardSummary,
+  useGetDemandsByNeighborhood,
+  useGetDemandsByCategory,
+  useGetRecentActivity,
+  useGetCitizenRanking,
+  useListDepartments,
+  useListDemands,
+} from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, AreaChart, Area } from "recharts";
-import { Activity, Users, CheckCircle2, Megaphone, Map as MapIcon, ArrowUpRight, Trophy, Clock } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import { Activity, Users, CheckCircle2, Megaphone, Clock, Building2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { ActivityIcon } from "@/components/activity-icon";
@@ -23,6 +29,8 @@ export default function Dashboard() {
   const { data: byCategory, isLoading: loadingCategories } = useGetDemandsByCategory();
   const { data: recentActivity, isLoading: loadingActivity } = useGetRecentActivity({ limit: 10 });
   const { data: ranking, isLoading: loadingRanking } = useGetCitizenRanking({ limit: 5 });
+  const { data: departments, isLoading: loadingDepartments } = useListDepartments();
+  const { data: allDemandsResponse, isLoading: loadingAllDemands } = useListDemands({ limit: 200 });
 
   const pieData = useMemo(() => {
     if (!byCategory) return [];
@@ -32,6 +40,69 @@ export default function Dashboard() {
       color: item.categoryColor || COLORS[Math.floor(Math.random() * COLORS.length)]
     }));
   }, [byCategory]);
+
+  const departmentStats = useMemo(() => {
+    const demands = allDemandsResponse?.demands ?? [];
+    const map = new Map<
+      number,
+      {
+        id: number;
+        name: string;
+        total: number;
+        resolved: number;
+        pending: number;
+        resolutionDaysSum: number;
+        resolutionDaysCount: number;
+      }
+    >();
+
+    for (const dept of departments ?? []) {
+      map.set(dept.id, {
+        id: dept.id,
+        name: dept.name,
+        total: 0,
+        resolved: 0,
+        pending: 0,
+        resolutionDaysSum: 0,
+        resolutionDaysCount: 0,
+      });
+    }
+
+    for (const d of demands) {
+      if (!d.departmentId) continue;
+      const entry = map.get(d.departmentId) ?? {
+        id: d.departmentId,
+        name: d.department?.name || `Secretaria #${d.departmentId}`,
+        total: 0,
+        resolved: 0,
+        pending: 0,
+        resolutionDaysSum: 0,
+        resolutionDaysCount: 0,
+      };
+      entry.total += 1;
+      if (d.status === "completed" || d.status === "closed") {
+        entry.resolved += 1;
+        const end = d.resolvedAt || d.updatedAt;
+        if (end) {
+          const days = Math.max(0, (new Date(end).getTime() - new Date(d.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+          entry.resolutionDaysSum += days;
+          entry.resolutionDaysCount += 1;
+        }
+      } else if (d.status !== "rejected") {
+        entry.pending += 1;
+      }
+      map.set(d.departmentId, entry);
+    }
+
+    return Array.from(map.values())
+      .filter((item) => item.total > 0)
+      .map((item) => ({
+        ...item,
+        rate: item.total > 0 ? Math.round((item.resolved / item.total) * 100) : 0,
+        avgDays: item.resolutionDaysCount > 0 ? item.resolutionDaysSum / item.resolutionDaysCount : null,
+      }))
+      .sort((a, b) => b.rate - a.rate || b.total - a.total);
+  }, [departments, allDemandsResponse]);
 
   return (
     <Layout>
@@ -132,6 +203,66 @@ export default function Dashboard() {
                         <Bar dataKey="resolved" name="Resolvidos" fill="#10b981" radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Desempenho por Secretaria */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Building2 className="w-5 h-5 text-primary" />
+                  Desempenho por Secretaria
+                </CardTitle>
+                <CardDescription>Taxa de resolução, demandas pendentes e tempo médio de resposta</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {loadingDepartments || loadingAllDemands ? (
+                  <div className="space-y-3">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <Skeleton key={i} className="h-14 w-full" />
+                    ))}
+                  </div>
+                ) : departmentStats.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-6 text-center">
+                    Ainda não há demandas vinculadas a secretarias.
+                  </p>
+                ) : (
+                  <div className="space-y-4">
+                    {departmentStats.map((dept) => (
+                      <Link
+                        key={dept.id}
+                        href={`/demandas?departmentId=${dept.id}`}
+                        className="block p-3.5 rounded-xl border bg-muted/20 hover:bg-muted/40 transition-colors"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                          <span className="font-semibold text-sm text-foreground">{dept.name}</span>
+                          <div className="flex items-center gap-3 text-xs">
+                            <span className="text-muted-foreground">
+                              {dept.resolved}/{dept.total} resolvidas
+                            </span>
+                            {dept.pending > 0 && (
+                              <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 font-semibold">
+                                {dept.pending} {dept.pending === 1 ? "pendente" : "pendentes"}
+                              </span>
+                            )}
+                            <span className="font-bold text-primary">{dept.rate}%</span>
+                          </div>
+                        </div>
+                        <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-primary rounded-full transition-all"
+                            style={{ width: `${dept.rate}%` }}
+                          />
+                        </div>
+                        <div className="mt-1.5 text-[11px] text-muted-foreground">
+                          {dept.avgDays != null
+                            ? `Tempo médio de solução: ${dept.avgDays.toFixed(1).replace(".", ",")} dias`
+                            : "Nenhuma demanda concluída ainda"}
+                        </div>
+                      </Link>
+                    ))}
                   </div>
                 )}
               </CardContent>
