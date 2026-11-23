@@ -11,12 +11,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { StatusBadge, isPendingModeration } from "@/components/status-badge";
 import { DemandStatus } from "@workspace/api-client-react";
 import { CategoryIcon } from "@/components/category-icon";
-import { Search, Loader2, MapPin, AlertTriangle, Megaphone } from "lucide-react";
+import { Search, Loader2, MapPin, AlertTriangle, Megaphone, SlidersHorizontal, X } from "lucide-react";
 import { JOAO_PESSOA_CENTER, DEFAULT_ZOOM, isInsideServiceArea } from "@/lib/geo";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
-// Fix for default marker icons in Leaflet with vite
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -31,7 +30,6 @@ const createCustomIcon = (status: string, pending = false) => {
   if (status === "in_progress") color = "#06b6d4";
   if (status === "completed") color = "#22c55e";
   if (status === "rejected") color = "#ef4444";
-  // Em análise (só autor e gestão veem): cinza, para não parecer demanda já publicada.
   if (pending) color = "#94a3b8";
 
   const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" fill="${color}" stroke="white" stroke-width="1.5">
@@ -78,6 +76,9 @@ export default function MapPage() {
   const [status, setStatus] = useState<string>("all");
   const [categoryId, setCategoryId] = useState<string>("all");
   const [neighborhoodId, setNeighborhoodId] = useState<string>("all");
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+
+  const activeExtraFiltersCount = (status !== "all" ? 1 : 0) + (categoryId !== "all" ? 1 : 0);
 
   const { data: demandsResponse, isLoading: loadingDemands } = useListDemands({
     search: search || undefined,
@@ -95,7 +96,6 @@ export default function MapPage() {
     return neighborhoods?.find((n) => n.id.toString() === neighborhoodId)?.name ?? null;
   }, [neighborhoodId, neighborhoods]);
 
-  // Só aparecem no mapa demandas dentro da área de atendimento (João Pessoa e região).
   const { visibleDemands, hiddenCount, stats, points } = useMemo(() => {
     const all = demandsResponse?.demands ?? [];
     const visible = all.filter(d => d.lat != null && d.lng != null && isInsideServiceArea(d.lat, d.lng));
@@ -117,27 +117,18 @@ export default function MapPage() {
 
   return (
     <Layout>
-      <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 64px)" }}>
-        {/* Filter bar */}
-        <div className="z-20 bg-card border-b p-4 shadow-sm flex flex-col lg:flex-row gap-4 items-center justify-between flex-shrink-0">
-          <div className="flex items-center gap-2">
+      <div className="flex flex-col h-[calc(100dvh-64px)]">
+        {/* Barra de filtros compacta no mobile e completa no desktop */}
+        <div className="z-20 bg-card border-b px-3 py-2.5 sm:p-4 shadow-sm flex flex-col lg:flex-row gap-2.5 lg:gap-4 lg:items-center lg:justify-between flex-shrink-0">
+          <div className="hidden lg:flex items-center gap-2">
             <MapPin className="w-5 h-5 text-primary" />
             <h1 className="text-xl font-bold">Mapa de Demandas</h1>
           </div>
 
-          <div className="flex flex-col sm:flex-row flex-wrap gap-3 w-full lg:w-auto">
-            <div className="relative flex-1 sm:w-56">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                placeholder="Buscar demandas..."
-                className="pl-9"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-
+          {/* Linha principal: Bairro + Botão Filtros no mobile */}
+          <div className="flex items-center gap-2 w-full lg:w-auto">
             <Select value={neighborhoodId} onValueChange={setNeighborhoodId}>
-              <SelectTrigger className="w-full sm:w-[175px]">
+              <SelectTrigger className="flex-1 lg:w-[180px] h-9 text-sm">
                 <SelectValue placeholder="Bairro" />
               </SelectTrigger>
               <SelectContent>
@@ -148,8 +139,37 @@ export default function MapPage() {
               </SelectContent>
             </Select>
 
+            <Button
+              type="button"
+              variant={mobileFiltersOpen || activeExtraFiltersCount > 0 ? "secondary" : "outline"}
+              size="sm"
+              className="lg:hidden h-9 px-3 shrink-0 gap-1.5"
+              onClick={() => setMobileFiltersOpen((v) => !v)}
+            >
+              {mobileFiltersOpen ? <X className="w-4 h-4" /> : <SlidersHorizontal className="w-4 h-4" />}
+              Filtros
+              {activeExtraFiltersCount > 0 && (
+                <span className="ml-0.5 rounded-full bg-primary text-primary-foreground text-[10px] w-4 h-4 flex items-center justify-center font-bold">
+                  {activeExtraFiltersCount}
+                </span>
+              )}
+            </Button>
+          </div>
+
+          {/* Filtros extras: sempre visíveis no desktop, recolhíveis no mobile */}
+          <div className={`${mobileFiltersOpen ? "flex" : "hidden"} lg:flex flex-col sm:flex-row gap-2.5 w-full lg:w-auto`}>
+            <div className="relative flex-1 lg:w-56">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Buscar demandas..."
+                className="pl-9 h-9 text-sm"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+
             <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger className="w-full sm:w-[155px]">
+              <SelectTrigger className="w-full sm:w-[155px] h-9 text-sm">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
@@ -164,7 +184,7 @@ export default function MapPage() {
             </Select>
 
             <Select value={categoryId} onValueChange={setCategoryId}>
-              <SelectTrigger className="w-full sm:w-[175px]">
+              <SelectTrigger className="w-full sm:w-[175px] h-9 text-sm">
                 <SelectValue placeholder="Categoria" />
               </SelectTrigger>
               <SelectContent>
@@ -178,32 +198,32 @@ export default function MapPage() {
         </div>
 
         {/* Map */}
-        <div style={{ flex: 1, position: "relative", zIndex: 10 }}>
-          {/* Resumo flutuante do bairro / visão atual */}
+        <div className="flex-1 relative z-10 min-h-0">
+          {/* Resumo flutuante compacto */}
           {!loadingDemands && (
-            <div className="absolute top-4 left-14 right-4 sm:right-auto z-[1000] rounded-xl border bg-card/95 backdrop-blur-sm px-4 py-2.5 shadow-md flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            <div className="absolute top-3 left-14 right-3 sm:right-auto z-[1000] rounded-xl border bg-card/95 backdrop-blur-sm px-3 py-2 shadow-md flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] sm:text-xs">
               <span className="font-bold text-foreground">
                 {selectedNeighborhoodName ? selectedNeighborhoodName : "João Pessoa"}
               </span>
-              <span className="flex items-center gap-1.5 text-amber-600 font-semibold">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" />
+              <span className="flex items-center gap-1 text-amber-600 font-semibold">
+                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
                 {stats.open} {stats.open === 1 ? "aberta" : "abertas"}
               </span>
-              <span className="flex items-center gap-1.5 text-cyan-600 font-semibold">
-                <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 inline-block" />
-                {stats.inProgress} em andamento
+              <span className="flex items-center gap-1 text-cyan-600 font-semibold">
+                <span className="w-2 h-2 rounded-full bg-cyan-500 inline-block" />
+                {stats.inProgress} andamento
               </span>
-              <span className="flex items-center gap-1.5 text-green-600 font-semibold">
-                <span className="w-2.5 h-2.5 rounded-full bg-green-500 inline-block" />
+              <span className="flex items-center gap-1 text-green-600 font-semibold">
+                <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
                 {stats.completed} {stats.completed === 1 ? "resolvida" : "resolvidas"}
               </span>
               {neighborhoodId !== "all" && (
                 <button
                   type="button"
                   onClick={() => setNeighborhoodId("all")}
-                  className="text-primary font-medium hover:underline ml-1"
+                  className="text-primary font-medium hover:underline"
                 >
-                  Limpar bairro
+                  Limpar
                 </button>
               )}
             </div>
@@ -218,10 +238,10 @@ export default function MapPage() {
             </div>
           )}
           {hiddenCount > 0 && (
-            <div className="absolute bottom-4 left-4 z-[1000] max-w-xs rounded-md border bg-card/95 p-3 text-xs shadow flex gap-2 items-start">
+            <div className="hidden sm:flex absolute bottom-4 left-4 z-[1000] max-w-xs rounded-md border bg-card/95 p-3 text-xs shadow gap-2 items-start">
               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
               <span>
-                {hiddenCount} {hiddenCount === 1 ? "demanda está" : "demandas estão"} sem localização válida em João Pessoa e não {hiddenCount === 1 ? "aparece" : "aparecem"} no mapa.
+                {hiddenCount} {hiddenCount === 1 ? "demanda está" : "demandas estão"} sem localização válida em João Pessoa.
               </span>
             </div>
           )}
@@ -274,8 +294,8 @@ export default function MapPage() {
             ))}
           </MapContainer>
 
-          <Link href="/demandas/nova" className="absolute bottom-6 right-4 z-[1000]">
-            <Button size="lg" className="rounded-full shadow-lg font-bold gap-2">
+          <Link href="/demandas/nova" className="fixed bottom-5 right-4 left-4 sm:left-auto z-[1000]">
+            <Button size="lg" className="w-full sm:w-auto rounded-full shadow-xl font-bold gap-2 h-12">
               <Megaphone className="w-5 h-5" />
               Reportar problema
             </Button>
