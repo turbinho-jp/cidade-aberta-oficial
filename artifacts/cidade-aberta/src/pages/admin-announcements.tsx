@@ -7,9 +7,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Loader2, Megaphone, Trash2, Send } from "lucide-react";
+import { Loader2, Megaphone, Trash2, Send, MapPin, Camera, X } from "lucide-react";
 import { format } from "date-fns";
+import { LocationPicker } from "@/components/location-picker";
+import { PhotoPicker, type PickedPhoto } from "@/components/photo-picker";
 import type { AnnouncementItem } from "./announcements";
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("read"));
+    reader.readAsDataURL(blob);
+  });
+}
 
 export default function AdminAnnouncements() {
   const { isAdmin, isSecretary, isLoading: authLoading } = useAuth();
@@ -19,6 +30,8 @@ export default function AdminAnnouncements() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [imageUrl, setImageUrl] = useState("");
+  const [photos, setPhotos] = useState<PickedPhoto[]>([]);
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [expiresAt, setExpiresAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -47,6 +60,13 @@ export default function AdminAnnouncements() {
     }
     setSubmitting(true);
     try {
+      let finalImageUrl: string | null = imageUrl.trim() || null;
+
+      // Se o administrador escolheu uma foto/flyer direto do aparelho, converte para Data URL
+      if (photos.length > 0) {
+        finalImageUrl = await blobToDataUrl(photos[0].blob);
+      }
+
       const res = await fetch("/api/announcements", {
         method: "POST",
         credentials: "include",
@@ -55,16 +75,20 @@ export default function AdminAnnouncements() {
           title: title.trim(),
           body: body.trim(),
           scope: "comunitario",
-          imageUrl: imageUrl.trim() || null,
+          imageUrl: finalImageUrl,
+          lat: coords ? coords.lat : null,
+          lng: coords ? coords.lng : null,
           expiresAt: expiresAt ? new Date(`${expiresAt}T23:59:59`).toISOString() : null,
           isPublished: true,
         }),
       });
       if (!res.ok) throw new Error();
-      toast({ title: "Publicação enviada para o mural" });
+      toast({ title: "Publicação enviada para o mural!" });
       setTitle("");
       setBody("");
       setImageUrl("");
+      setPhotos([]);
+      setCoords(null);
       setExpiresAt("");
       load();
     } catch {
@@ -122,7 +146,7 @@ export default function AdminAnnouncements() {
             <CardTitle className="text-lg">Nova Publicação</CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-5">
               <div className="space-y-1.5">
                 <Label htmlFor="title">Título</Label>
                 <Input
@@ -134,15 +158,30 @@ export default function AdminAnnouncements() {
                 />
               </div>
 
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Camera className="w-4 h-4" /> Imagem ou flyer da ação (opcional)
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Envie uma foto direto do seu aparelho (reduzida automaticamente) ou cole um link externo abaixo.
+                </p>
+                <PhotoPicker
+                  value={photos}
+                  onChange={(next) => setPhotos(next.slice(0, 1))}
+                  disabled={submitting}
+                />
+              </div>
+
               <div className="grid sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label htmlFor="imageUrl">URL de imagem/foto (opcional)</Label>
+                  <Label htmlFor="imageUrl">Ou cole uma URL de imagem (opcional)</Label>
                   <Input
                     id="imageUrl"
                     type="url"
                     placeholder="https://..."
                     value={imageUrl}
                     onChange={(e) => setImageUrl(e.target.value)}
+                    disabled={photos.length > 0}
                   />
                 </div>
 
@@ -169,7 +208,30 @@ export default function AdminAnnouncements() {
                 />
               </div>
 
-              <Button type="submit" disabled={submitting}>
+              <div className="space-y-2 rounded-xl border border-border/60 bg-muted/20 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="flex items-center gap-2 font-semibold">
+                    <MapPin className="w-4 h-4 text-primary" /> Local no mapa (opcional)
+                  </Label>
+                  {coords && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs text-muted-foreground"
+                      onClick={() => setCoords(null)}
+                    >
+                      <X className="w-3.5 h-3.5 mr-1" /> Remover pino
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Clique no mapa para marcar onde a ação vai acontecer. Se marcar um ponto, o aviso aparece também com um pino roxo no Mapa da Cidade.
+                </p>
+                <LocationPicker value={coords} onChange={setCoords} />
+              </div>
+
+              <Button type="submit" disabled={submitting} className="w-full sm:w-auto">
                 {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
                 Publicar no Mural
               </Button>
@@ -188,9 +250,16 @@ export default function AdminAnnouncements() {
               <Card key={item.id}>
                 <CardContent className="p-4 flex items-start justify-between gap-4">
                   <div className="space-y-1 min-w-0">
-                    <span className="text-xs text-muted-foreground">
-                      {format(new Date(item.publishedAt), "dd/MM/yyyy 'às' HH:mm")}
-                    </span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs text-muted-foreground">
+                        {format(new Date(item.publishedAt), "dd/MM/yyyy 'às' HH:mm")}
+                      </span>
+                      {typeof item.lat === "number" && typeof item.lng === "number" && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                          <MapPin className="w-3 h-3" /> No mapa
+                        </span>
+                      )}
+                    </div>
                     <h3 className="font-semibold">{item.title}</h3>
                     <p className="text-sm text-muted-foreground line-clamp-2">{item.body}</p>
                   </div>

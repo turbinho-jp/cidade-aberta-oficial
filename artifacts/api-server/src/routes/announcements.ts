@@ -5,7 +5,7 @@ import { requireAdmin, optionalAuth } from "../lib/auth";
 import { logActivity } from "../lib/activity";
 import {
   parseBody, parseQuery, parseId, sendValidationError,
-  text, int, oneOf, optional, nullable, httpUrl, bool,
+  text, int, oneOf, optional, nullable, bool,
 } from "../lib/validate";
 
 const router = Router();
@@ -107,7 +107,7 @@ router.post("/announcements", requireAdmin, async (req, res) => {
       departmentId: optional(nullable(int())),
       neighborhoodId: optional(nullable(int())),
       categoryId: optional(nullable(int())),
-      imageUrl: optional(nullable(httpUrl()), { blankAsMissing: true }),
+      imageUrl: optional(nullable(text({ min: 10, max: 2_000_000 })), { blankAsMissing: true }),
       expiresAt: optional(nullable(text({ min: 8, max: 40 })), { blankAsMissing: true }),
       isPublished: optional(bool()),
     });
