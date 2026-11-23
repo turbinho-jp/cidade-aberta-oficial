@@ -14,7 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardDescription } from "@/components/ui/card";
-import { Megaphone, MapPin, Camera, Loader2, EyeOff } from "lucide-react";
+import { Megaphone, MapPin, Camera, Loader2, EyeOff, LogIn } from "lucide-react";
 import { LocationPicker } from "@/components/location-picker";
 import { PhotoPicker, type PickedPhoto } from "@/components/photo-picker";
 import { uploadAttachment } from "@/lib/attachments";
@@ -22,6 +22,7 @@ import { SERVICE_AREA } from "@/lib/geo";
 import { SlaNotice } from "@/components/sla-notice";
 import { buildAutoTitle } from "@/lib/demand-title";
 
+const DRAFT_KEY = "cidade_aberta_demand_draft_v1";
 const LOCATION_REQUIRED = "Marque o local do problema no mapa";
 const OUT_OF_AREA = "O local deve estar na área de atendimento (João Pessoa e região)";
 
@@ -41,6 +42,33 @@ const demandSchema = z.object({
     .min(SERVICE_AREA.west, OUT_OF_AREA)
     .max(SERVICE_AREA.east, OUT_OF_AREA),
 });
+
+type DemandFormValues = z.infer<typeof demandSchema>;
+
+type SavedDraft = {
+  values: Partial<DemandFormValues>;
+  photosDataUrls: string[];
+};
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("read"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function dataUrlToPickedPhoto(dataUrl: string): Promise<PickedPhoto | null> {
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const previewUrl = URL.createObjectURL(blob);
+    return { blob, previewUrl } as PickedPhoto;
+  } catch {
+    return null;
+  }
+}
 
 type GeoResult = { display_name?: string; address?: Record<string, string> };
 
@@ -69,12 +97,7 @@ export default function DemandCreate() {
   const { data: categories } = useListCategories();
   const { data: neighborhoods } = useListNeighborhoods();
 
-  // Redirect if not logged in (só depois que a sessão terminou de carregar)
-  useEffect(() => {
-    if (!authLoading && !isAuthenticated) setLocation("/login");
-  }, [authLoading, isAuthenticated, setLocation]);
-
-  const form = useForm<z.infer<typeof demandSchema>>({
+  const form = useForm<DemandFormValues>({
     resolver: zodResolver(demandSchema),
     defaultValues: {
       title: "",
@@ -87,8 +110,50 @@ export default function DemandCreate() {
   const [photos, setPhotos] = useState<PickedPhoto[]>([]);
   const [uploading, setUploading] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(false);
   const addressTouched = useRef(false);
   const neighborhoodTouched = useRef(false);
+
+  // Restaura rascunho salvo caso o morador tenha preenchido antes de fazer login
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = sessionStorage.getItem(DRAFT_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as SavedDraft;
+        if (parsed.values) {
+          if (parsed.values.address) addressTouched.current = true;
+          if (parsed.values.neighborhoodId) neighborhoodTouched.current = true;
+          form.reset({
+            title: parsed.values.title ?? "",
+            description: parsed.values.description ?? "",
+            address: parsed.values.address ?? "",
+            isAnonymous: parsed.values.isAnonymous === true,
+            categoryId: parsed.values.categoryId,
+            neighborhoodId: parsed.values.neighborhoodId,
+            lat: parsed.values.lat,
+            lng: parsed.values.lng,
+          });
+        }
+        if (Array.isArray(parsed.photosDataUrls) && parsed.photosDataUrls.length > 0) {
+          const restored = await Promise.all(parsed.photosDataUrls.map(dataUrlToPickedPhoto));
+          if (!cancelled) {
+            setPhotos(restored.filter((p): p is PickedPhoto => p !== null));
+          }
+        }
+        if (!cancelled) {
+          setDraftRestored(true);
+          sessionStorage.removeItem(DRAFT_KEY);
+        }
+      } catch {
+        sessionStorage.removeItem(DRAFT_KEY);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [form]);
 
   const watchedCategoryId = form.watch("categoryId");
   const watchedNeighborhoodId = form.watch("neighborhoodId");
@@ -147,9 +212,32 @@ export default function DemandCreate() {
     };
   }, [lat, lng, neighborhoods, form]);
 
-  if (authLoading || !isAuthenticated) return null;
+  const saveDraftAndRedirectToLogin = async (values: DemandFormValues) => {
+    try {
+      const photosDataUrls = await Promise.all(photos.map((p) => blobToDataUrl(p.blob)));
+      const draft: SavedDraft = { values, photosDataUrls };
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch {
+      // Se exceder o limite do sessionStorage por muitas fotos grandes, salva ao menos os dados de texto
+      try {
+        sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ values, photosDataUrls: [] }));
+      } catch {
+        // ignora
+      }
+    }
+    toast({
+      title: "Quase lá! Entre para publicar",
+      description: "Seu relato já foi salvo. Faça login ou cadastre-se para concluir o envio.",
+    });
+    setLocation("/login?redirect=/demandas/nova");
+  };
 
-  const onSubmit = (data: z.infer<typeof demandSchema>) => {
+  const onSubmit = async (data: DemandFormValues) => {
+    if (!authLoading && !isAuthenticated) {
+      await saveDraftAndRedirectToLogin(data);
+      return;
+    }
+
     const category = categories?.find((c) => c.id === data.categoryId);
     const neighborhood = neighborhoods?.find((n) => n.id === data.neighborhoodId);
     const categoryName = category?.name ?? "Problema urbano";
@@ -159,10 +247,9 @@ export default function DemandCreate() {
 
     const payload = { ...data, title, description, isAnonymous: data.isAnonymous === true };
 
-    // lat/lng vêm do local marcado pelo usuário no mapa (LocationPicker).
     createMutation.mutate({ data: payload }, {
       onSuccess: async (res) => {
-        // As fotos sobem depois que a demanda existe; se alguma falhar, a demanda continua registrada.
+        sessionStorage.removeItem(DRAFT_KEY);
         let failed = 0;
         if (photos.length > 0) {
           setUploading(true);
@@ -205,6 +292,22 @@ export default function DemandCreate() {
           <p className="text-muted-foreground mt-2">
             Marque o local, escolha a categoria e, se puder, envie uma foto. É rápido.
           </p>
+
+          {draftRestored && isAuthenticated && (
+            <div className="mt-4 rounded-lg border border-primary/30 bg-primary/10 text-foreground px-4 py-3 text-sm">
+              <strong>Seu relato foi restaurado!</strong> Confira os dados abaixo e clique em <strong>Enviar</strong> para publicar.
+            </div>
+          )}
+
+          {!authLoading && !isAuthenticated && (
+            <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50/80 dark:bg-blue-950/30 dark:border-blue-800 text-blue-950 dark:text-blue-100 px-4 py-3 text-sm flex items-start gap-2.5">
+              <LogIn className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <span>
+                Você pode preencher todo o relato agora. Pediremos seu login apenas no final, na hora de enviar.
+              </span>
+            </div>
+          )}
+
           <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 px-4 py-3 text-sm space-y-1">
             <p className="font-semibold">Antes de enviar</p>
             <ul className="list-disc pl-5 space-y-0.5">
@@ -423,7 +526,7 @@ export default function DemandCreate() {
                   </Button>
                   <Button type="submit" size="lg" className="font-semibold px-8" disabled={createMutation.isPending || uploading}>
                     {(createMutation.isPending || uploading) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                    Enviar
+                    {!authLoading && !isAuthenticated ? "Continuar para enviar" : "Enviar"}
                   </Button>
                 </div>
               </form>

@@ -1,4 +1,4 @@
-import { useLocation } from "wouter";
+import { useLocation, useSearch, Link } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Link } from "wouter";
 
 const loginSchema = z.object({
   email: z.string().email("E-mail inválido"),
@@ -17,8 +16,14 @@ const loginSchema = z.object({
 
 export default function Login() {
   const [, setLocation] = useLocation();
+  const searchStr = useSearch();
   const { toast } = useToast();
   const loginMutation = useLogin();
+
+  const redirectTo = (() => {
+    const raw = new URLSearchParams(searchStr).get("redirect");
+    return raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : null;
+  })();
 
   const form = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
@@ -29,7 +34,9 @@ export default function Login() {
     loginMutation.mutate({ data }, {
       onSuccess: (res) => {
         toast({ title: "Login realizado com sucesso", description: `Bem-vindo, ${res.user.name}!` });
-        if (res.user.role === 'admin' || res.user.role === 'secretary') {
+        if (redirectTo) {
+          setLocation(redirectTo);
+        } else if (res.user.role === 'admin' || res.user.role === 'secretary') {
           setLocation("/admin");
         } else {
           setLocation("/");
@@ -55,7 +62,9 @@ export default function Login() {
           </div>
           <CardTitle className="text-2xl font-bold tracking-tight">Bem-vindo de volta</CardTitle>
           <CardDescription className="text-base">
-            Entre para participar e acompanhar sua cidade
+            {redirectTo === "/demandas/nova"
+              ? "Entre na sua conta para finalizar e publicar seu relato"
+              : "Entre para participar e acompanhar sua cidade"}
           </CardDescription>
         </CardHeader>
         <CardContent>
