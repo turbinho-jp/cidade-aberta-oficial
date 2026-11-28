@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { avatarSrc } from "@/lib/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MapPin, ThumbsUp, Calendar, AlertCircle, HardHat, FileText, CheckCircle2, Clock, Send, ShieldAlert } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
@@ -323,7 +324,7 @@ export default function DemandDetail() {
                   comments.map(comment => (
                     <div key={comment.id} className={`flex gap-4 p-4 rounded-xl ${comment.isOfficial ? 'bg-primary/5 border border-primary/10' : 'bg-muted/20'}`}>
                       <Avatar className="w-10 h-10 border border-background">
-                        {comment.authorAvatarUrl && <AvatarImage src={comment.authorAvatarUrl} />}
+                        {comment.authorAvatarUrl && <AvatarImage src={avatarSrc(comment.authorAvatarUrl)} />}
                         <AvatarFallback className={comment.isOfficial ? 'bg-primary text-primary-foreground' : ''}>
                           {comment.authorName.substring(0,2).toUpperCase()}
                         </AvatarFallback>

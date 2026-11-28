@@ -1,4 +1,4 @@
-import { Sprout, Eye, ShieldCheck, Landmark, Crown, type LucideIcon } from "lucide-react";
+import { Sprout, Megaphone, Users, Landmark, Crown, type LucideIcon } from "lucide-react";
 
 /**
  * Patentes da gamificação. São derivadas dos pontos (não ficam gravadas no banco), então
@@ -16,12 +16,19 @@ export interface Level {
 }
 
 export const LEVELS: Level[] = [
-  { id: 1, name: "Cidadão Atento", min: 0, icon: Sprout, color: "text-emerald-700 bg-emerald-50 border-emerald-200" },
-  { id: 2, name: "Monitor do Bairro", min: 101, icon: Eye, color: "text-sky-700 bg-sky-50 border-sky-200" },
-  { id: 3, name: "Guardião da Comunidade", min: 501, icon: ShieldCheck, color: "text-violet-700 bg-violet-50 border-violet-200" },
-  { id: 4, name: "Vereador Comunitário", min: 1501, icon: Landmark, color: "text-orange-700 bg-orange-50 border-orange-200" },
-  { id: 5, name: "Prefeito Comunitário", min: 3001, icon: Crown, color: "text-amber-700 bg-amber-50 border-amber-300" },
+  { id: 1, name: "Cidadão Pessoense", min: 0, icon: Sprout, color: "text-emerald-700 bg-emerald-50 border-emerald-200" },
+  { id: 2, name: "Liderança", min: 150, icon: Megaphone, color: "text-sky-700 bg-sky-50 border-sky-200" },
+  { id: 3, name: "Conselheiro", min: 500, icon: Users, color: "text-violet-700 bg-violet-50 border-violet-200" },
+  { id: 4, name: "Vereador", min: 1200, icon: Landmark, color: "text-orange-700 bg-orange-50 border-orange-200" },
+  { id: 5, name: "Prefeito", min: 2500, icon: Crown, color: "text-amber-700 bg-amber-50 border-amber-300" },
 ];
+
+/**
+ * Pontos para liberar a foto de perfil: o mínimo do último nível (Prefeito).
+ * O servidor confere por conta própria: AVATAR_UNLOCK_POINTS em api-server/src/lib/gamification.ts
+ * precisa ter o mesmo valor.
+ */
+export const AVATAR_UNLOCK_POINTS = LEVELS[LEVELS.length - 1]!.min;
 
 export interface LevelProgress {
   level: Level;

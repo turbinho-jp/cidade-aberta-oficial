@@ -6,6 +6,7 @@ import { canSee } from "../lib/visibility";
 import { publicName, ANONYMOUS_NAME, actorNameFor } from "../lib/public-name";
 import { parseBody, parseId, sendValidationError, text } from "../lib/validate";
 import { logActivity } from "../lib/activity";
+import { avatarUrlFor, avatarVersionSql } from "../lib/avatar";
 import { awardPoints, revokePoints, countActive, POINTS, COMMENTS_PER_DEMAND_CAP } from "../lib/gamification";
 
 const router = Router();
@@ -18,17 +19,19 @@ router.get("/demands/:id/comments", optionalAuth, async (req, res) => {
     const [parent] = await db.select({ isApproved: demandsTable.isApproved, authorId: demandsTable.authorId, isAnonymous: demandsTable.isAnonymous })
       .from(demandsTable).where(eq(demandsTable.id, id)).limit(1);
     if (!parent || !canSee((req as any).currentUser, parent)) { res.json([]); return; }
-    const comments = await db.select().from(commentsTable)
+    // A foto vem de `users` (só a versão, nunca o base64) e não da cópia antiga em comments.author_avatar_url.
+    const comments = await db.select({ comment: commentsTable, avatarVersion: avatarVersionSql }).from(commentsTable)
+      .leftJoin(usersTable, eq(usersTable.id, commentsTable.authorId))
       .where(and(eq(commentsTable.demandId, id), eq(commentsTable.isModerated, false)))
       .orderBy(commentsTable.createdAt);
     const viewer = (req as any).currentUser as { id: number } | null;
     // O autor de uma demanda anônima que comenta nela continua anônimo para os outros (só ele se vê).
     const hidden = (c: { authorId: number; isOfficial: boolean }) =>
       parent.isAnonymous && !c.isOfficial && c.authorId === parent.authorId && viewer?.id !== c.authorId;
-    res.json(comments.map(c => ({
+    res.json(comments.map(({ comment: c, avatarVersion }) => ({
       id: c.id, demandId: c.demandId, content: c.content, authorId: hidden(c) ? 0 : c.authorId,
       authorName: hidden(c) ? ANONYMOUS_NAME : c.isOfficial ? c.authorName : publicName(c.authorName),
-      authorAvatarUrl: hidden(c) ? null : c.authorAvatarUrl,
+      authorAvatarUrl: hidden(c) ? null : avatarUrlFor(c.authorId, avatarVersion),
       isModerated: c.isModerated, isOfficial: c.isOfficial, createdAt: c.createdAt.toISOString(),
     })));
   } catch (err) {
@@ -68,10 +71,12 @@ router.post("/demands/:id/comments", requireAuth, requireVerifiedEmail, async (r
     // O feed é público: atividade em demanda ainda não aprovada não pode vazar o título dela.
     if (demand.isApproved) await logActivity({ type: "comment_added", description: `Novo comentário em: ${demand.title}`, demandId, demandTitle: demand.title, actorName: actorNameFor(currentUser, demand) });
 
+    const [{ avatarVersion } = { avatarVersion: null }] = await db.select({ avatarVersion: avatarVersionSql }).from(usersTable)
+      .where(eq(usersTable.id, comment.authorId)).limit(1);
     res.status(201).json({
       id: comment.id, demandId: comment.demandId, content: comment.content,
       authorId: comment.authorId, authorName: comment.isOfficial ? comment.authorName : publicName(comment.authorName),
-      authorAvatarUrl: comment.authorAvatarUrl, isModerated: comment.isModerated,
+      authorAvatarUrl: avatarUrlFor(comment.authorId, avatarVersion), isModerated: comment.isModerated,
       isOfficial: comment.isOfficial, createdAt: comment.createdAt.toISOString(),
     });
   } catch (err) {

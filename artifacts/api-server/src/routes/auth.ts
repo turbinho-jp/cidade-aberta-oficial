@@ -5,6 +5,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { hashPassword, verifyPassword, setAuthCookie, clearAuthCookie, getUserFromCookie, requireAuth } from "../lib/auth";
 import { isLoginBlocked, recordLoginFailure, registerAttemptBlocked, verificationResendBlocked } from "../lib/rate-limit";
 import { sendVerificationEmail, sendPasswordResetEmail } from "../lib/mailer";
+import { avatarUrlOf } from "../lib/avatar";
 import { parseBody, sendValidationError, text, email, optional } from "../lib/validate";
 
 const router = Router();
@@ -73,7 +74,7 @@ router.post("/auth/register", async (req, res) => {
     res.status(201).json({
       user: {
         id: user.id, name: user.name, email: user.email, role: user.role,
-        phone: user.phone, avatarUrl: user.avatarUrl, points: user.points,
+        phone: user.phone, avatarUrl: avatarUrlOf(user), points: user.points,
         demandsCount: user.demandsCount, confirmationsCount: user.confirmationsCount,
         commentsCount: user.commentsCount, emailVerified: !!user.emailVerifiedAt, createdAt: user.createdAt.toISOString(),
       }
@@ -119,7 +120,7 @@ router.post("/auth/login", async (req, res) => {
     res.json({
       user: {
         id: user.id, name: user.name, email: user.email, role: user.role,
-        phone: user.phone, avatarUrl: user.avatarUrl, points: user.points,
+        phone: user.phone, avatarUrl: avatarUrlOf(user), points: user.points,
         demandsCount: user.demandsCount, confirmationsCount: user.confirmationsCount,
         commentsCount: user.commentsCount, emailVerified: !!user.emailVerifiedAt, createdAt: user.createdAt.toISOString(),
       }
@@ -225,7 +226,7 @@ router.get("/auth/me", async (req, res) => {
     }
     res.json({
       id: user.id, name: user.name, email: user.email, role: user.role,
-      phone: user.phone, avatarUrl: user.avatarUrl, points: user.points,
+      phone: user.phone, avatarUrl: avatarUrlOf(user), points: user.points,
       demandsCount: user.demandsCount, confirmationsCount: user.confirmationsCount,
       commentsCount: user.commentsCount, emailVerified: !!user.emailVerifiedAt, createdAt: user.createdAt.toISOString(),
     });

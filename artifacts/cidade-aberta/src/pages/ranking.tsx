@@ -10,7 +10,8 @@ import { Trophy, Medal, Star, Crown } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { LevelBadge, LevelProgressBar } from "@/components/level-badge";
-import { getLevelProgress, HOW_TO_EARN, LEVELS } from "@/lib/gamification";
+import { getLevelProgress, HOW_TO_EARN, LEVELS, AVATAR_UNLOCK_POINTS } from "@/lib/gamification";
+import { avatarSrc } from "@/lib/avatar";
 
 type Period = "month" | "all";
 
@@ -26,7 +27,7 @@ export default function Ranking() {
   });
 
   const neighborhoodName = neighborhoods?.find(n => String(n.id) === neighborhoodId)?.name;
-  const mayorTitle = neighborhoodName ? `Prefeito do ${neighborhoodName}` : "Prefeito da Cidade";
+  const mayorTitle = neighborhoodName ? `Destaque do mês em ${neighborhoodName}` : "Destaque do mês";
   const isCitizen = user && user.role === "citizen";
   const myLevel = isCitizen ? getLevelProgress(user.points) : null;
 
@@ -39,7 +40,7 @@ export default function Ranking() {
           </div>
           <h1 className="text-4xl font-bold tracking-tight">Ranking Cidadão</h1>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Quem mais ajuda a cidade a funcionar. O título de Prefeito é de quem lidera o mês.
+            Quem mais ajuda a cidade a funcionar. O selo de Destaque do mês é de quem lidera o ranking.
           </p>
         </div>
 
@@ -107,7 +108,7 @@ export default function Ranking() {
                     </div>
 
                     <Avatar className="w-12 h-12 border-2 border-background shadow-sm ml-4 mr-4">
-                      <AvatarImage src={item.avatarUrl || undefined} />
+                      <AvatarImage src={avatarSrc(item.avatarUrl)} />
                       <AvatarFallback>{item.name.substring(0, 2).toUpperCase()}</AvatarFallback>
                     </Avatar>
 
@@ -184,6 +185,9 @@ export default function Ranking() {
                   </div>
                 );
               })}
+              <p className="text-xs text-muted-foreground pt-2 border-t">
+                Quem chega a {LEVELS[LEVELS.length - 1]!.name} ({AVATAR_UNLOCK_POINTS} pts) libera a foto de perfil.
+              </p>
             </CardContent>
           </Card>
         </div>

@@ -13,6 +13,7 @@ import { and, eq, sql } from "drizzle-orm";
  *   login dela por até 15 minutos.
  * - Cadastro: conta toda tentativa, por IP, numa janela de 1 hora.
  * - Reenvio do e-mail de verificação: conta todo pedido, por usuário, numa janela de 1 hora.
+ * - Troca de foto de perfil: conta toda troca aceita, por usuário, numa janela de 1 hora.
  */
 const MINUTE = 60_000;
 export const LOGIN_WINDOW_MS = 15 * MINUTE;
@@ -70,6 +71,17 @@ export async function verificationResendBlocked(userId: number): Promise<boolean
   const key = `verify-resend:user:${userId}`;
   const n = await countRecent(key, VERIFY_RESEND_WINDOW_MS);
   if (n >= VERIFY_RESEND_MAX_PER_USER) return true;
+  await record([key]);
+  return false;
+}
+
+export const AVATAR_UPLOAD_WINDOW_MS = 60 * MINUTE;
+
+/** Registra a troca de foto e diz se passou do limite por hora (true = bloquear). */
+export async function avatarUploadBlocked(userId: number, maxPerHour: number): Promise<boolean> {
+  const key = `avatar-upload:user:${userId}`;
+  const n = await countRecent(key, AVATAR_UPLOAD_WINDOW_MS);
+  if (n >= maxPerHour) return true;
   await record([key]);
   return false;
 }

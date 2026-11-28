@@ -26,6 +26,13 @@ export const POINTS = {
   RESOLUTION_VALIDATION_RECEIVED: 15,
 } as const;
 
+/**
+ * Pontos para liberar a foto de perfil: é o mínimo do último nível (Prefeito).
+ * Precisa ficar igual ao último `min` de LEVELS em cidade-aberta/src/lib/gamification.ts.
+ * A equipe da prefeitura não precisa disso.
+ */
+export const AVATAR_UNLOCK_POINTS = 2500;
+
 /** Limite de apoios que rendem pontos ao autor por demanda (50 pontos no máximo). */
 export const SUPPORT_RECEIVED_CAP = 10;
 /** Validações de resolução que rendem pontos por demanda (cada uma paga a quem valida e ao autor). */

@@ -9,6 +9,8 @@ import { useAuth } from "@/lib/auth";
 import { LevelBadge, LevelProgressBar } from "@/components/level-badge";
 import { getAchievements, REASON_LABELS } from "@/lib/gamification";
 import { DemandCard } from "@/components/demand-card";
+import { AvatarManager } from "@/components/avatar-manager";
+import { avatarSrc } from "@/lib/avatar";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -33,10 +35,19 @@ export default function Profile() {
         <div className="bg-card border rounded-3xl p-8 shadow-sm flex flex-col md:flex-row items-center md:items-start gap-8 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none" />
           
-          <Avatar className="w-32 h-32 border-4 border-background shadow-md">
-            <AvatarImage src={profile.avatarUrl || undefined} />
-            <AvatarFallback className="text-4xl bg-primary text-primary-foreground">{profile.name.substring(0,2).toUpperCase()}</AvatarFallback>
-          </Avatar>
+          <div className="flex flex-col items-center gap-3">
+            <Avatar className="w-32 h-32 border-4 border-background shadow-md">
+              <AvatarImage src={avatarSrc(profile.avatarUrl)} />
+              <AvatarFallback className="text-4xl bg-primary text-primary-foreground">{profile.name.substring(0,2).toUpperCase()}</AvatarFallback>
+            </Avatar>
+            <AvatarManager
+              userId={profile.id}
+              hasAvatar={!!profile.avatarUrl}
+              isMe={isMe}
+              isStaff={!!user && user.role !== "citizen"}
+              myPoints={user?.points ?? 0}
+            />
+          </div>
           
           <div className="flex-1 text-center md:text-left space-y-4">
             <div>

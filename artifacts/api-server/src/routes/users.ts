@@ -5,11 +5,19 @@ import { optionalAuth, requireAuth } from "../lib/auth";
 import { startOfCurrentMonth } from "../lib/gamification";
 import { visibleTo } from "../lib/visibility";
 import { publicName } from "../lib/public-name";
+import { avatarUrlFor, avatarUrlOf, avatarVersionSql } from "../lib/avatar";
 import { parseId, parseQuery, sendValidationError, paginationFields, optional, int, oneOf } from "../lib/validate";
 
 const router = Router();
 
 const STAFF_ROLES = ["admin", "secretary", "moderator"] as const;
+
+/** Colunas do ranking. Não inclui `avatar_url` (base64): só a versão dela, calculada no banco. */
+const rankingColumns = {
+  id: usersTable.id, name: usersTable.name, points: usersTable.points,
+  demandsCount: usersTable.demandsCount, confirmationsCount: usersTable.confirmationsCount,
+  avatarVersion: avatarVersionSql,
+};
 
 router.get("/users/:id/profile", optionalAuth, async (req, res) => {
   try {
@@ -44,7 +52,7 @@ router.get("/users/:id/profile", optionalAuth, async (req, res) => {
       rankPosition = ahead + 1;
     }
     res.json({
-      id: user.id, name: shownName, role: user.role, avatarUrl: user.avatarUrl,
+      id: user.id, name: shownName, role: user.role, avatarUrl: avatarUrlOf(user),
       points: user.points, demandsCount: user.demandsCount,
       confirmationsCount: user.confirmationsCount, commentsCount: user.commentsCount,
       rankPosition,
@@ -79,11 +87,11 @@ router.get("/users/ranking", async (req, res) => {
 
     // Ranking público de cidadãos: sem contas da prefeitura e sem quem ainda não pontuou.
     if (period !== "month" && neighborhoodId === undefined) {
-      const users = await db.select().from(usersTable)
+      const users = await db.select(rankingColumns).from(usersTable)
         .where(and(notInArray(usersTable.role, [...STAFF_ROLES]), gt(usersTable.points, 0)))
         .orderBy(desc(usersTable.points)).limit(limit);
       res.json(users.map((u, i) => ({
-        userId: u.id, name: publicName(u.name), avatarUrl: u.avatarUrl,
+        userId: u.id, name: publicName(u.name), avatarUrl: avatarUrlFor(u.id, u.avatarVersion),
         points: u.points, demandsCount: u.demandsCount,
         confirmationsCount: u.confirmationsCount, rank: i + 1,
       })));
@@ -108,12 +116,12 @@ router.get("/users/ranking", async (req, res) => {
       .orderBy(desc(total), pointTransactionsTable.userId)
       .limit(limit);
     const ids = rows.map(r => r.userId);
-    const users = ids.length ? await db.select().from(usersTable).where(inArray(usersTable.id, ids)) : [];
+    const users = ids.length ? await db.select(rankingColumns).from(usersTable).where(inArray(usersTable.id, ids)) : [];
     const byId = new Map(users.map(u => [u.id, u]));
     res.json(rows.flatMap((r, i) => {
       const u = byId.get(r.userId);
       return u ? [{
-        userId: u.id, name: publicName(u.name), avatarUrl: u.avatarUrl,
+        userId: u.id, name: publicName(u.name), avatarUrl: avatarUrlFor(u.id, u.avatarVersion),
         points: r.points, demandsCount: u.demandsCount,
         confirmationsCount: u.confirmationsCount, rank: i + 1,
       }] : [];

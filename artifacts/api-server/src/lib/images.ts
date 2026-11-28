@@ -61,3 +61,54 @@ export function stripJpegMetadata(buf: Buffer): Buffer | null {
   }
   return null;
 }
+
+/**
+ * Largura e altura em pixels, lidas do cabeçalho (sem decodificar a imagem). Devolve `null` se o
+ * cabeçalho estiver truncado ou malformado. Serve para barrar imagens enormes antes de gravar.
+ */
+export function getImageSize(buf: Buffer, type: ImageMime): { width: number; height: number } | null {
+  if (type === "image/png") {
+    // 8 bytes de assinatura + chunk IHDR (tamanho, "IHDR", largura, altura).
+    if (buf.length < 24 || buf.toString("latin1", 12, 16) !== "IHDR") return null;
+    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  if (type === "image/webp") {
+    if (buf.length < 30) return null;
+    const kind = buf.toString("latin1", 12, 16);
+    if (kind === "VP8 ") {
+      // Quadro-chave lossy: start code 9d 01 2a e depois 14 bits de largura e de altura.
+      if (buf[23] !== 0x9d || buf[24] !== 0x01 || buf[25] !== 0x2a) return null;
+      return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
+    }
+    if (kind === "VP8L") {
+      if (buf[20] !== 0x2f) return null;
+      const bits = buf.readUInt32LE(21);
+      return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+    }
+    if (kind === "VP8X") {
+      // Largura e altura menos 1, em 24 bits cada.
+      return { width: buf.readUIntLE(24, 3) + 1, height: buf.readUIntLE(27, 3) + 1 };
+    }
+    return null;
+  }
+  // JPEG: procura o primeiro marcador SOFn (0xC0..0xCF, menos DHT, JPG e DAC).
+  let i = 2;
+  while (i + 4 <= buf.length) {
+    if (buf[i] !== 0xff) return null;
+    while (i < buf.length && buf[i] === 0xff) i++;
+    const marker = buf[i++];
+    if (marker === undefined) return null;
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (marker === 0xd9 || marker === 0xda) return null; // chegou nos dados sem achar o SOF
+    if (i + 2 > buf.length) return null;
+    const len = buf.readUInt16BE(i);
+    if (len < 2) return null;
+    const isSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isSof) {
+      if (i + 7 > buf.length) return null;
+      return { height: buf.readUInt16BE(i + 3), width: buf.readUInt16BE(i + 5) };
+    }
+    i += len;
+  }
+  return null;
+}

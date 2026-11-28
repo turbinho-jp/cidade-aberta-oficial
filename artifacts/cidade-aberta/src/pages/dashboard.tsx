@@ -18,6 +18,7 @@ import { ActivityIcon } from "@/components/activity-icon";
 import { ExportDemandsCsv } from "@/components/export-demands-csv";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { avatarSrc } from "@/lib/avatar";
 
 const FEED_PREVIEW = 8;
 const COLORS = ['#10b981', '#f59e0b', '#06b6d4', '#8b5cf6', '#ef4444', '#f97316', '#3b82f6'];
@@ -324,7 +325,7 @@ export default function Dashboard() {
                             {idx + 1}
                           </div>
                           <Avatar className="w-8 h-8">
-                            <AvatarImage src={user.avatarUrl || undefined} />
+                            <AvatarImage src={avatarSrc(user.avatarUrl)} />
                             <AvatarFallback>{user.name.substring(0,2).toUpperCase()}</AvatarFallback>
                           </Avatar>
                           <span className="font-medium text-sm">{user.name}</span>
